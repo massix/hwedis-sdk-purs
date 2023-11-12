@@ -7,7 +7,7 @@ jobs:
       - uses: actions/checkout@v2
       - uses: purescript-contrib/setup-purescript@main
         with:
-          purescript: "0.15.0"
+          purescript: "0.15.10"
           spago: "0.21.0"
       - uses: actions/setup-node@v2
         with:
