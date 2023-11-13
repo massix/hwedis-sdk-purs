@@ -14,14 +14,22 @@ to generate this file without the comments in this block.
 , dependencies =
   [ "aff"
   , "aff-promise"
+  , "argonaut"
   , "arrays"
+  , "bifunctors"
   , "console"
   , "effect"
+  , "either"
+  , "foreign"
   , "identity"
   , "maybe"
+  , "node-process"
   , "prelude"
   , "spec"
   , "strings"
+  , "transformers"
+  , "unsafe-coerce"
+  , "yoga-postgres"
   ]
 , packages = ./packages.dhall
 , sources = [ "src/**/*.purs", "test/**/*.purs" ]
