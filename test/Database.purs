@@ -58,8 +58,8 @@ withDatabase func = do
   connectionString (Just h) (Just p) = pure $ "postgres://test:test@" <> h <> ":" <> show p <> "/test"
   connectionString _ _ = throwError $ error "Could not detect container information"
 
-testCreateTables :: Spec Unit
-testCreateTables = do
+testDatabase :: Spec Unit
+testDatabase = do
   describe "Database" do
     it "should create tables if they do not exist" do
       withDatabase \cs -> do
