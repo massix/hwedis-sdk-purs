@@ -14,6 +14,7 @@ module Storage.Database
   , findPhoneById
   , findUserById
   , persistUserWithJoin
+  , countUsers
   ) where
 
 import Prelude
@@ -23,7 +24,9 @@ import Data.Argonaut (class DecodeJson, JsonDecodeError, decodeJson, printJsonDe
 import Data.Array (head)
 import Data.Bifunctor (lmap)
 import Data.Either (Either)
+import Data.Int (round)
 import Data.Maybe (Maybe(..), fromMaybe)
+import Data.Number (isNaN)
 import Effect (Effect)
 import Effect.Aff (Aff, Error, bracket, error)
 import Effect.Aff.Class (liftAff)
@@ -31,7 +34,7 @@ import Effect.Class (liftEffect)
 import Foreign (Foreign)
 import Node.Process as NP
 import Unsafe.Coerce (unsafeCoerce)
-import Yoga.Postgres (Query(..), connect, execute_, query, release) as YG
+import Yoga.Postgres (Query(..), connect, execute_, query, queryOne_, release) as YG
 import Yoga.Postgres as PG
 import Yoga.Postgres.SqlValue (toSql) as YG
 
@@ -135,13 +138,11 @@ persistUserWithJoin u = do
   addr <- persistAddress u.address
   phone <- persistPhone u.phonenumber
 
-  let user = generateUser u addr phone
-
-  case user of
+  case (generateUser u addr phone) of
     Nothing -> pure Nothing
     Just x -> do
-      user' <- persistUser x
-      case user' of
+      user <- persistUser x
+      case user of
         Nothing -> pure Nothing
         Just finalUser -> findUserById finalUser.id
 
@@ -191,6 +192,37 @@ findUserById userId = do
     ph <- p
     ad <- a
     pure { id: u.id, firstname: u.firstname, lastname: u.lastname, phonenumber: ph, address: ad }
+
+foreign import parseIntImpl :: String -> Int -> Number
+
+newtype Radix = Radix Int
+
+parseInt :: String -> Radix -> Maybe Int
+parseInt n (Radix r) =
+  let
+    result = parseIntImpl n r
+  in
+    if r >= 2 && r <= 36 then
+      if isNaN result then
+        Nothing
+      else
+        Just $ round result
+    else
+      Nothing
+
+countUsers :: DatabaseT Int
+countUsers = do
+  pool <- ask
+  liftAff $ withPool pool $ \c -> do
+    res <- YG.queryOne_ fromDbResult q c
+    let result = res >>= _.count >>> flip parseInt (Radix 10)
+    case result of
+      Nothing -> pure 0
+      Just x -> pure x
+
+  where
+  q :: YG.Query { count :: String }
+  q = YG.Query "select count(*) as count from \"user\""
 
 fromDbResult :: ∀ a. DecodeJson a => Foreign -> Either Error a
 fromDbResult = unsafeCoerce >>> decodeJson >>> lmap toError

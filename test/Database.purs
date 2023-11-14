@@ -6,6 +6,7 @@ import Data.Argonaut (class DecodeJson, Json, JsonDecodeError, decodeJson, print
 import Data.Array (length)
 import Data.Bifunctor (lmap)
 import Data.Either (Either)
+import Data.Foldable (traverse_)
 import Data.Maybe (Maybe(..), fromJust, fromMaybe, isJust)
 import Effect.Aff (Aff, Error, error, throwError)
 import Effect.Class (liftEffect)
@@ -205,3 +206,33 @@ testCreateTables = do
         finalResult.phonenumber.id `shouldEqual` 1
         finalResult.phonenumber.prefix `shouldEqual` "+33"
 
+    it "should count users" do
+      withDatabase \cs -> do
+        let connectionInfo = PG.connectionInfoFromString cs
+        DB.runDatabaseT
+          ( do
+              DB.createTables
+              void $ DB.persistPhone { id: 0, prefix: "+33", number: "123456789" }
+              void $ DB.persistAddress { id: 0, country: "France", street: "Street", city: "City", zip: "1234" }
+          )
+          connectionInfo
+
+        firstCount <- DB.runDatabaseT DB.countUsers connectionInfo
+        traverse_ (\u -> DB.runDatabaseT (DB.persistUser u) connectionInfo)
+          [ { id: 0
+            , firstname: "John"
+            , lastname: "Doe"
+            , address: 1
+            , phonenumber: 1
+            }
+          , { id: 0
+            , firstname: "Jane"
+            , lastname: "Doe"
+            , address: 1
+            , phonenumber: 1
+            }
+          ]
+
+        secondCount <- DB.runDatabaseT DB.countUsers connectionInfo
+        firstCount `shouldEqual` 0
+        secondCount `shouldEqual` 2
