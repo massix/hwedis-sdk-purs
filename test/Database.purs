@@ -236,3 +236,34 @@ testDatabase = do
         secondCount <- DB.runDatabaseT DB.countUsers connectionInfo
         firstCount `shouldEqual` 0
         secondCount `shouldEqual` 2
+
+    it "should update address" do
+       withDatabase \cs -> do
+        let connectionInfo = PG.connectionInfoFromString cs
+        DB.runDatabaseT DB.createTables connectionInfo
+
+        addr <- DB.runDatabaseT (DB.persistAddress { id: 0, country: "France", street: "Street", city: "City", zip: "1234" }) connectionInfo
+        let addr' = unsafePartial $ fromJust addr
+
+        result <- DB.runDatabaseT (DB.updateAddress { id: addr'.id, country: "Italy", street: "Different", city: addr'.city, zip: addr'.zip }) connectionInfo
+        result `shouldSatisfy` isJust
+
+        let result' = unsafePartial $ fromJust result
+        result'.country `shouldEqual` "Italy"
+        result'.street `shouldEqual` "Different"
+        result'.zip `shouldEqual` "1234"
+
+    it "should update phone" do
+      withDatabase \cs -> do
+        let connectionInfo = PG.connectionInfoFromString cs
+        DB.runDatabaseT DB.createTables connectionInfo
+
+        phone <- DB.runDatabaseT (DB.persistPhone { id: 0, prefix: "+33", number: "123456789" }) connectionInfo
+        let phone' = unsafePartial $ fromJust phone
+
+        result <- DB.runDatabaseT (DB.updatePhone { id: phone'.id, prefix: "+44", number: "987654321" }) connectionInfo
+        result `shouldSatisfy` isJust
+
+        let result' = unsafePartial $ fromJust result
+        result'.prefix `shouldEqual` "+44"
+        result'.number `shouldEqual` "987654321"

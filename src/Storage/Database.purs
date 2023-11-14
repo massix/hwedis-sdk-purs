@@ -15,6 +15,8 @@ module Storage.Database
   , findUserById
   , persistUserWithJoin
   , countUsers
+  , updateAddress
+  , updatePhone
   ) where
 
 import Prelude
@@ -93,6 +95,9 @@ configureFromEnvironment = do
 runDatabaseT :: ∀ a. DatabaseT a -> PG.ConnectionInfo -> Aff a
 runDatabaseT m ci = bracket (liftEffect $ PG.mkPool ci) (PG.end >>> liftEffect) (runReaderT m)
 
+extractHead :: ∀ a m. Monad m => Array a -> m (Maybe a)
+extractHead = pure <<< head
+
 createTables :: DatabaseT Unit
 createTables = do
   pool <- ask
@@ -107,20 +112,54 @@ createTables = do
 persistPhone :: PhoneNumber -> DatabaseT (Maybe PhoneNumber)
 persistPhone p = do
   pool <- ask
-  liftAff $ withPool pool $ \c -> YG.query fromDbResult q [ YG.toSql p.prefix, YG.toSql p.number ] c >>= pure <<< head
+  liftAff $ withPool pool $ \c -> YG.query fromDbResult q [ YG.toSql p.prefix, YG.toSql p.number ] c >>= extractHead
   where
   q :: YG.Query PhoneNumber
   q = YG.Query "insert into phone (prefix, number) values ($1, $2) returning *"
 
+updatePhone :: PhoneNumber -> DatabaseT (Maybe PhoneNumber)
+updatePhone p = do
+  pool <- ask
+  existing <- findPhoneById p.id
+
+  liftAff $ withPool pool $ \c -> case existing of
+    Nothing -> pure Nothing
+    Just phone ->
+      YG.query fromDbResult q [ YG.toSql p.prefix, YG.toSql p.number, YG.toSql phone.id ] c >>= extractHead
+
+  where
+  q :: YG.Query PhoneNumber
+  q = YG.Query "update phone set prefix = $1, number = $2 where id = $3 returning *"
+
 persistAddress :: Address -> DatabaseT (Maybe Address)
 persistAddress a = do
   pool <- ask
-  liftAff $ withPool pool $ \c -> do
-    res <- YG.query fromDbResult q [ YG.toSql a.country, YG.toSql a.city, YG.toSql a.street, YG.toSql a.zip ] c
-    pure $ head res
+  liftAff $ withPool pool $ \c ->
+    YG.query fromDbResult q [ YG.toSql a.country, YG.toSql a.city, YG.toSql a.street, YG.toSql a.zip ] c >>= extractHead
   where
   q :: YG.Query Address
   q = YG.Query "insert into address (country, city, street, zip) values ($1, $2, $3, $4) returning *"
+
+updateAddress :: Address -> DatabaseT (Maybe Address)
+updateAddress a = do
+  pool <- ask
+  existing <- findAddressById a.id
+
+  liftAff $ withPool pool $ \c -> case existing of
+    Nothing -> pure Nothing
+    Just address ->
+      YG.query fromDbResult q
+        [ YG.toSql a.country
+        , YG.toSql a.city
+        , YG.toSql a.street
+        , YG.toSql a.zip
+        , YG.toSql address.id
+        ]
+        c >>= extractHead
+
+  where
+  q :: YG.Query Address
+  q = YG.Query "update address set country = $1, city = $2, street = $3, zip = $4 where id = $5 returning *"
 
 persistUser :: User -> DatabaseT (Maybe User)
 persistUser u = do
@@ -156,7 +195,7 @@ persistUserWithJoin u = do
 findAddressById :: Int -> DatabaseT (Maybe Address)
 findAddressById addressId = do
   pool <- ask
-  liftAff $ withPool pool $ \c -> YG.query fromDbResult q [ YG.toSql addressId ] c >>= pure <<< head
+  liftAff $ withPool pool $ \c -> YG.query fromDbResult q [ YG.toSql addressId ] c >>= extractHead
 
   where
   q :: YG.Query Address
@@ -165,7 +204,7 @@ findAddressById addressId = do
 findPhoneById :: Int -> DatabaseT (Maybe PhoneNumber)
 findPhoneById phoneId = do
   pool <- ask
-  liftAff $ withPool pool $ \c -> YG.query fromDbResult q [ YG.toSql phoneId ] c >>= pure <<< head
+  liftAff $ withPool pool $ \c -> YG.query fromDbResult q [ YG.toSql phoneId ] c >>= extractHead
 
   where
   q :: YG.Query PhoneNumber
@@ -174,7 +213,7 @@ findPhoneById phoneId = do
 findUserById :: Int -> DatabaseT (Maybe UserWithJoin)
 findUserById userId = do
   pool <- ask
-  user <- liftAff $ withPool pool $ \c -> YG.query fromDbResult q [ YG.toSql userId ] c >>= pure <<< head
+  user <- liftAff $ withPool pool $ \c -> YG.query fromDbResult q [ YG.toSql userId ] c >>= extractHead
 
   case user of
     Nothing -> pure Nothing
