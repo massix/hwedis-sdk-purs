@@ -24,6 +24,7 @@ to generate this file without the comments in this block.
   , "identity"
   , "maybe"
   , "node-process"
+  , "partial"
   , "prelude"
   , "spec"
   , "strings"

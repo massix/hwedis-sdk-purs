@@ -13,6 +13,7 @@ module Storage.Database
   , findAddressById
   , findPhoneById
   , findUserById
+  , persistUserWithJoin
   ) where
 
 import Prelude
@@ -103,9 +104,7 @@ createTables = do
 persistPhone :: PhoneNumber -> DatabaseT (Maybe PhoneNumber)
 persistPhone p = do
   pool <- ask
-  liftAff $ withPool pool $ \c -> do
-    res <- YG.query fromDbResult q [ YG.toSql p.prefix, YG.toSql p.number ] c
-    pure $ head res
+  liftAff $ withPool pool $ \c -> YG.query fromDbResult q [ YG.toSql p.prefix, YG.toSql p.number ] c >>= pure <<< head
   where
   q :: YG.Query PhoneNumber
   q = YG.Query "insert into phone (prefix, number) values ($1, $2) returning *"
@@ -130,12 +129,34 @@ persistUser u = do
   q :: YG.Query User
   q = YG.Query "insert into \"user\" (firstname, lastname, phonenumber, address) values ($1, $2, $3, $4) returning *"
 
+persistUserWithJoin :: UserWithJoin -> DatabaseT (Maybe UserWithJoin)
+persistUserWithJoin u = do
+  -- persist other data first
+  addr <- persistAddress u.address
+  phone <- persistPhone u.phonenumber
+
+  let user = generateUser u addr phone
+
+  case user of
+    Nothing -> pure Nothing
+    Just x -> do
+      user' <- persistUser x
+      case user' of
+        Nothing -> pure Nothing
+        Just finalUser -> findUserById finalUser.id
+
+  where
+  generateUser :: UserWithJoin -> Maybe Address -> Maybe PhoneNumber -> Maybe User
+  generateUser user addr ph = do
+    a <- addr
+    p <- ph
+    pure { id: user.id, firstname: user.firstname, lastname: user.lastname, phonenumber: p.id, address: a.id }
+
 findAddressById :: Int -> DatabaseT (Maybe Address)
 findAddressById addressId = do
   pool <- ask
-  liftAff $ withPool pool $ \c -> do
-    res <- YG.query fromDbResult q [ YG.toSql addressId ] c
-    pure $ head res
+  liftAff $ withPool pool $ \c -> YG.query fromDbResult q [ YG.toSql addressId ] c >>= pure <<< head
+
   where
   q :: YG.Query Address
   q = YG.Query "select * from address where id = $1"
@@ -143,9 +164,8 @@ findAddressById addressId = do
 findPhoneById :: Int -> DatabaseT (Maybe PhoneNumber)
 findPhoneById phoneId = do
   pool <- ask
-  liftAff $ withPool pool $ \c -> do
-    res <- YG.query fromDbResult q [ YG.toSql phoneId ] c
-    pure $ head res
+  liftAff $ withPool pool $ \c -> YG.query fromDbResult q [ YG.toSql phoneId ] c >>= pure <<< head
+
   where
   q :: YG.Query PhoneNumber
   q = YG.Query "select * from phone where id = $1"
@@ -153,27 +173,24 @@ findPhoneById phoneId = do
 findUserById :: Int -> DatabaseT (Maybe UserWithJoin)
 findUserById userId = do
   pool <- ask
-  user <- liftAff $ withPool pool $ \c -> do
-    res <- YG.query fromDbResult q [ YG.toSql userId ] c
-    let res' = head res
-    case res' of
-      Nothing -> pure Nothing
-      Just x -> pure $ Just x
+  user <- liftAff $ withPool pool $ \c -> YG.query fromDbResult q [ YG.toSql userId ] c >>= pure <<< head
 
   case user of
     Nothing -> pure Nothing
     Just u -> do
       phone <- findPhoneById u.phonenumber
       address <- findAddressById u.address
-      case phone of
-        Nothing -> pure Nothing
-        Just p -> case address of
-          Nothing -> pure Nothing
-          Just a -> pure $ Just { id: u.id, firstname: u.firstname, lastname: u.lastname, phonenumber: p, address: a }
+      pure $ buildUser u phone address
 
   where
   q :: YG.Query User
   q = YG.Query "select * from \"user\" where id = $1"
+
+  buildUser :: User -> Maybe PhoneNumber -> Maybe Address -> Maybe UserWithJoin
+  buildUser u p a = do
+    ph <- p
+    ad <- a
+    pure { id: u.id, firstname: u.firstname, lastname: u.lastname, phonenumber: ph, address: ad }
 
 fromDbResult :: ∀ a. DecodeJson a => Foreign -> Either Error a
 fromDbResult = unsafeCoerce >>> decodeJson >>> lmap toError

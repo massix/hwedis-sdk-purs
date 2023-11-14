@@ -6,10 +6,11 @@ import Data.Argonaut (class DecodeJson, Json, JsonDecodeError, decodeJson, print
 import Data.Array (length)
 import Data.Bifunctor (lmap)
 import Data.Either (Either)
-import Data.Maybe (Maybe(..), fromMaybe, isJust)
+import Data.Maybe (Maybe(..), fromJust, fromMaybe, isJust)
 import Effect.Aff (Aff, Error, error, throwError)
 import Effect.Class (liftEffect)
 import Foreign (Foreign)
+import Partial.Unsafe (unsafePartial)
 import Storage.Database as DB
 import Test.Spec (Spec, describe, it)
 import Test.Spec.Assertions (shouldContain, shouldEqual, shouldNotEqual, shouldSatisfy)
@@ -169,4 +170,38 @@ testCreateTables = do
         byId' `shouldNotEqual` { id: 0, firstname: "", lastname: "", address: address', phonenumber: phone' }
         byId'.address.country `shouldEqual` "France"
 
+    it "should persist an user with join" do
+      withDatabase \cs -> do
+        let connectionInfo = PG.connectionInfoFromString cs
+        DB.runDatabaseT DB.createTables connectionInfo
+
+        res <- DB.runDatabaseT
+          ( DB.persistUserWithJoin
+              { id: 0
+              , firstname: "newUser"
+              , lastname: "lastName"
+              , address:
+                  { id: 0
+                  , country: "France"
+                  , street: "SomeStreet"
+                  , city: "Paris"
+                  , zip: "92000"
+                  }
+              , phonenumber:
+                  { id: 0
+                  , prefix: "+33"
+                  , number: "12345"
+                  }
+              }
+          )
+          connectionInfo
+
+        res `shouldSatisfy` isJust
+        let finalResult = unsafePartial $ fromJust res
+
+        finalResult.id `shouldEqual` 1
+        finalResult.address.id `shouldEqual` 1
+        finalResult.address.country `shouldEqual` "France"
+        finalResult.phonenumber.id `shouldEqual` 1
+        finalResult.phonenumber.prefix `shouldEqual` "+33"
 
