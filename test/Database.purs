@@ -14,7 +14,7 @@ import Foreign (Foreign)
 import Partial.Unsafe (unsafePartial)
 import Storage.Database (Address(..), PhoneNumber(..), User(..), UserWithJoin(..))
 import Storage.Database as DB
-import Test.Spec (Spec, describe, it)
+import Test.Spec (Spec, describe, it, itOnly)
 import Test.Spec.Assertions (shouldContain, shouldEqual, shouldSatisfy)
 import Test.TestContainers (WaitStrategy(..), containerHost, containerPort, exposePort, mkGenericContainer, setEnvironment, start, stop, waitStrategy)
 import Unsafe.Coerce (unsafeCoerce)
@@ -67,7 +67,7 @@ testDatabase = do
         let connectionInfo = PG.connectionInfoFromString cs
 
         -- Here we create the tables
-        traverse_ (\_ -> DB.runDatabaseT DB.createTables connectionInfo) [1 .. 1000]
+        traverse_ (\_ -> DB.runDatabaseT DB.createTables connectionInfo) [ 1 .. 1000 ]
 
         -- Make sure that the tables exist
         pool <- liftEffect $ YG.mkPool connectionInfo
@@ -381,3 +381,63 @@ testDatabase = do
         firstname `shouldEqual` "Jim"
         lastname `shouldEqual` "Big"
         newId `shouldEqual` uid
+
+    it "should delete user" do
+      withDatabase \cs -> do
+        let connectionInfo = PG.connectionInfoFromString cs
+        currentUser <- DB.runDatabaseT
+          ( do
+              DB.createTables
+              void $ DB.persist $ Address { id: 0, country: "France", city: "Valbonne", street: "SomeStreet", zip: "06560" }
+              void $ DB.persist $ PhoneNumber { id: 0, prefix: "+33", number: "0612345678" }
+              DB.persist $ User { id: 0, firstname: "John", lastname: "Doe", address: 1, phonenumber: 1 }
+          )
+          connectionInfo
+
+        currentUser `shouldSatisfy` isJust
+        res <- DB.runDatabaseT (DB.delete (unsafePartial $ fromJust currentUser)) connectionInfo
+        res `shouldSatisfy` isJust
+
+        let (User { id, firstname, lastname }) = unsafePartial $ fromJust currentUser
+        id `shouldEqual` 1
+        firstname `shouldEqual` "John"
+        lastname `shouldEqual` "Doe"
+
+    it "should delete address" do
+      withDatabase \cs -> do
+        let connectionInfo = PG.connectionInfoFromString cs
+        currentAddress <- DB.runDatabaseT
+          ( do
+              DB.createTables
+              DB.persist $ Address { id: 0, country: "France", city: "Valbonne", street: "SomeStreet", zip: "06560" }
+          )
+          connectionInfo
+
+        currentAddress `shouldSatisfy` isJust
+        res <- DB.runDatabaseT (DB.delete (unsafePartial $ fromJust currentAddress)) connectionInfo
+        res `shouldSatisfy` isJust
+
+        let (Address { id, country, city, street }) = unsafePartial $ fromJust currentAddress
+        id `shouldEqual` 1
+        country `shouldEqual` "France"
+        city `shouldEqual` "Valbonne"
+        street `shouldEqual` "SomeStreet"
+
+    it "should delete phone" do
+      withDatabase \cs -> do
+        let connectionInfo = PG.connectionInfoFromString cs
+        currentPhone <- DB.runDatabaseT
+          ( do
+              DB.createTables
+              DB.persist $ PhoneNumber { id: 0, prefix: "+33", number: "0612345678" }
+          )
+          connectionInfo
+
+        currentPhone `shouldSatisfy` isJust
+        res <- DB.runDatabaseT (DB.delete (unsafePartial $ fromJust currentPhone)) connectionInfo
+        res `shouldSatisfy` isJust
+
+        let (PhoneNumber { id, prefix, number }) = unsafePartial $ fromJust currentPhone
+        id `shouldEqual` 1
+        prefix `shouldEqual` "+33"
+        number `shouldEqual` "0612345678"

@@ -6,8 +6,10 @@ module Storage.Database
   , class Persistable
   , class Updatable
   , class Findable
+  , class Deletable
   , createQuery
   , updateQuery
+  , deleteQuery
   , getId
   , findQuery
   , DatabaseT
@@ -17,6 +19,8 @@ module Storage.Database
   , persistUserWithJoin
   , find
   , update
+  , delete
+  , deleteWhereId
   , countUsers
   , countAddresses
   , countPhoneNumbers
@@ -44,15 +48,21 @@ import Yoga.Postgres.SqlValue (SqlValue, toSql) as YG
 
 type DatabaseT a = ReaderT PG.Pool Aff a
 
-class Persistable t where
-  createQuery :: t -> { query :: YG.Query t, params :: Array YG.SqlValue }
+type YGQuery :: Type -> Type
+type YGQuery a = { query :: YG.Query a, params :: Array YG.SqlValue }
 
-class Findable t <= Updatable t where
-  updateQuery :: t -> { query :: YG.Query t, params :: Array YG.SqlValue }
+class Persistable t where
+  createQuery :: t -> YGQuery t
 
 class Findable t where
-  findQuery :: Int -> { query :: YG.Query t, params :: Array YG.SqlValue }
+  findQuery :: Int -> YGQuery t
   getId :: t -> Int
+
+class Findable t <= Updatable t where
+  updateQuery :: t -> YGQuery t
+
+class Deletable t where
+  deleteQuery :: t -> YGQuery t
 
 -- This is our "model"
 newtype User = User
@@ -109,6 +119,12 @@ instance Updatable User where
     , params: [ YG.toSql firstname, YG.toSql lastname, YG.toSql phonenumber, YG.toSql address, YG.toSql id ]
     }
 
+instance Deletable User where
+  deleteQuery (User { id }) =
+    { query: YG.Query "delete from \"user\" where id = $1 returning *"
+    , params: [ YG.toSql id ]
+    }
+
 instance DecodeJson User where
   decodeJson :: Json -> Either JsonDecodeError User
   decodeJson j = do
@@ -140,6 +156,12 @@ instance Updatable Address where
     , params: [ YG.toSql country, YG.toSql city, YG.toSql street, YG.toSql zip, YG.toSql id ]
     }
 
+instance Deletable Address where
+  deleteQuery (Address { id }) =
+    { query: YG.Query "delete from address where id = $1 returning *"
+    , params: [ YG.toSql id ]
+    }
+
 instance DecodeJson Address where
   decodeJson :: Json -> Either JsonDecodeError Address
   decodeJson j = do
@@ -169,6 +191,12 @@ instance Updatable PhoneNumber where
   updateQuery (PhoneNumber { id, prefix, number }) =
     { query: YG.Query "update phone set prefix = $1, number = $2 where id = $3 returning *"
     , params: [ YG.toSql prefix, YG.toSql number, YG.toSql id ]
+    }
+
+instance Deletable PhoneNumber where
+  deleteQuery (PhoneNumber { id }) =
+    { query: YG.Query "delete from phone where id = $1 returning *"
+    , params: [ YG.toSql id ]
     }
 
 instance DecodeJson PhoneNumber where
@@ -224,6 +252,17 @@ update t = do
   where
   find_ :: t -> DatabaseT (Maybe t)
   find_ = find <<< getId
+
+delete :: ∀ t. Deletable t => DecodeJson t => t -> DatabaseT (Maybe t)
+delete t = do
+  pool <- ask
+  let q = deleteQuery t
+  liftAff $ withPool pool $ \c -> YG.query fromDbResult q.query q.params c >>= extractHead
+
+deleteWhereId :: ∀ t. Deletable t => Findable t => DecodeJson t => Int -> DatabaseT (Maybe t)
+deleteWhereId id = find id >>= case _ of
+  Nothing -> pure Nothing
+  Just x -> delete x
 
 persistUserWithJoin :: UserWithJoin -> DatabaseT (Maybe UserWithJoin)
 persistUserWithJoin u@(UserWithJoin { address, phonenumber }) = do
