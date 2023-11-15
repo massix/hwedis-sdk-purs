@@ -14,7 +14,7 @@ import Foreign (Foreign)
 import Partial.Unsafe (unsafePartial)
 import Storage.Database (Address(..), PhoneNumber(..), User(..), UserWithJoin(..))
 import Storage.Database as DB
-import Test.Spec (Spec, describe, it, itOnly)
+import Test.Spec (Spec, describe, it)
 import Test.Spec.Assertions (shouldContain, shouldEqual, shouldSatisfy)
 import Test.TestContainers (WaitStrategy(..), containerHost, containerPort, exposePort, mkGenericContainer, setEnvironment, start, stop, waitStrategy)
 import Unsafe.Coerce (unsafeCoerce)
