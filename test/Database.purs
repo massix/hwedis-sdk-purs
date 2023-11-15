@@ -7,14 +7,15 @@ import Data.Array (length)
 import Data.Bifunctor (lmap)
 import Data.Either (Either)
 import Data.Foldable (traverse_)
-import Data.Maybe (Maybe(..), fromJust, fromMaybe, isJust)
+import Data.Maybe (Maybe(..), fromJust, isJust)
 import Effect.Aff (Aff, Error, error, throwError)
 import Effect.Class (liftEffect)
 import Foreign (Foreign)
 import Partial.Unsafe (unsafePartial)
+import Storage.Database (Address(..), PhoneNumber(..), User(..), UserWithJoin(..))
 import Storage.Database as DB
 import Test.Spec (Spec, describe, it)
-import Test.Spec.Assertions (shouldContain, shouldEqual, shouldNotEqual, shouldSatisfy)
+import Test.Spec.Assertions (shouldContain, shouldEqual, shouldSatisfy)
 import Test.TestContainers (WaitStrategy(..), containerHost, containerPort, exposePort, mkGenericContainer, setEnvironment, start, stop, waitStrategy)
 import Unsafe.Coerce (unsafeCoerce)
 import Yoga.Postgres (Query(..), connect, end, mkPool, query, release) as YG
@@ -91,85 +92,104 @@ testDatabase = do
         let connectionInfo = PG.connectionInfoFromString cs
         DB.runDatabaseT DB.createTables connectionInfo
 
-        res <- DB.runDatabaseT (DB.persistPhone { id: 0, prefix: "+33", number: "123456789" }) connectionInfo
-        let fmRes = fromMaybe { id: 0, prefix: "", number: "" } res
-
+        res <- DB.runDatabaseT (DB.persist $ PhoneNumber { id: 0, prefix: "+33", number: "123456789" }) connectionInfo
         res `shouldSatisfy` isJust
-        fmRes `shouldNotEqual` { id: 0, prefix: "", number: "" }
-        fmRes.prefix `shouldEqual` "+33"
-        fmRes.number `shouldEqual` "123456789"
+
+        let PhoneNumber { prefix, number } = unsafePartial $ fromJust res
+        prefix `shouldEqual` "+33"
+        number `shouldEqual` "123456789"
 
     it "should create addresses" do
       withDatabase \cs -> do
         let connectionInfo = PG.connectionInfoFromString cs
         DB.runDatabaseT DB.createTables connectionInfo
 
-        res <- DB.runDatabaseT (DB.persistAddress { id: 0, country: "France", street: "Street", city: "City", zip: "1234" }) connectionInfo
-        let fmRes = fromMaybe { id: 0, country: "", street: "", city: "", zip: "" } res
-
+        res <- DB.runDatabaseT (DB.persist $ Address { id: 0, country: "France", street: "Street", city: "City", zip: "1234" }) connectionInfo
         res `shouldSatisfy` isJust
-        fmRes `shouldNotEqual` { id: 0, country: "", street: "", city: "", zip: "" }
-        fmRes.country `shouldEqual` "France"
-        fmRes.street `shouldEqual` "Street"
-        fmRes.city `shouldEqual` "City"
-        fmRes.zip `shouldEqual` "1234"
+
+        let Address { country, street, city, zip } = unsafePartial $ fromJust res
+        country `shouldEqual` "France"
+        street `shouldEqual` "Street"
+        city `shouldEqual` "City"
+        zip `shouldEqual` "1234"
 
     it "should create users" do
       withDatabase \cs -> do
         let connectionInfo = PG.connectionInfoFromString cs
         DB.runDatabaseT DB.createTables connectionInfo
 
-        address <- DB.runDatabaseT (DB.persistAddress { id: 0, country: "France", street: "Street", city: "City", zip: "1234" }) connectionInfo
-        let address' = fromMaybe { id: 0, country: "", street: "", city: "", zip: "" } address
-        phone <- DB.runDatabaseT (DB.persistPhone { id: 0, prefix: "+33", number: "123456789" }) connectionInfo
-        let phone' = fromMaybe { id: 0, prefix: "", number: "" } phone
-        user <- DB.runDatabaseT (DB.persistUser { id: 0, firstname: "John", lastname: "Doe", address: (_.id address'), phonenumber: (_.id phone') }) connectionInfo
-        let user' = fromMaybe { id: 0, firstname: "", lastname: "", address: 0, phonenumber: 0 } user
+        address <- DB.runDatabaseT (DB.persist $ Address { id: 0, country: "France", street: "Street", city: "City", zip: "1234" }) connectionInfo
+        address `shouldSatisfy` isJust
+        let (Address { id: addrId }) = unsafePartial $ fromJust address
 
+        phone <- DB.runDatabaseT (DB.persist $ PhoneNumber { id: 0, prefix: "+33", number: "123456789" }) connectionInfo
+        phone `shouldSatisfy` isJust
+        let (PhoneNumber { id: phoneId }) = unsafePartial $ fromJust phone
+
+        user <- DB.runDatabaseT (DB.persist $ User { id: 0, firstname: "John", lastname: "Doe", address: addrId, phonenumber: phoneId }) connectionInfo
         user `shouldSatisfy` isJust
-        user' `shouldNotEqual` { id: 0, firstname: "", lastname: "", address: 0, phonenumber: 0 }
+        let (User { firstname, lastname, address, phonenumber }) = unsafePartial $ fromJust user
+
+        firstname `shouldEqual` "John"
+        lastname `shouldEqual` "Doe"
+        address `shouldEqual` addrId
+        phonenumber `shouldEqual` phoneId
 
     it "should retrieve an address with their id" do
       withDatabase \cs -> do
         let connectionInfo = PG.connectionInfoFromString cs
         DB.runDatabaseT DB.createTables connectionInfo
-        void $ DB.runDatabaseT (DB.persistAddress { id: 0, country: "France", street: "Street", city: "City", zip: "1234" }) connectionInfo
+        void $ DB.runDatabaseT (DB.persist $ Address { id: 0, country: "France", street: "Street", city: "City", zip: "1234" }) connectionInfo
 
-        address <- DB.runDatabaseT (DB.findAddressById 1) connectionInfo
-        let address' = fromMaybe { id: 0, country: "", street: "", city: "", zip: "" } address
-
+        address <- DB.runDatabaseT (DB.find 1) connectionInfo
         address `shouldSatisfy` isJust
-        address' `shouldEqual` { id: 1, country: "France", street: "Street", city: "City", zip: "1234" }
+        let Address { id, country, street, city, zip } = unsafePartial $ fromJust address
+
+        id `shouldEqual` 1
+        country `shouldEqual` "France"
+        street `shouldEqual` "Street"
+        city `shouldEqual` "City"
+        zip `shouldEqual` "1234"
 
     it "should retrieve a phone with their id" do
       withDatabase \cs -> do
         let connectionInfo = PG.connectionInfoFromString cs
         DB.runDatabaseT DB.createTables connectionInfo
-        void $ DB.runDatabaseT (DB.persistPhone { id: 0, prefix: "+33", number: "123456789" }) connectionInfo
+        void $ DB.runDatabaseT (DB.persist $ PhoneNumber { id: 0, prefix: "+33", number: "123456789" }) connectionInfo
 
-        phone <- DB.runDatabaseT (DB.findPhoneById 1) connectionInfo
-        let phone' = fromMaybe { id: 0, prefix: "", number: "" } phone
-
+        phone <- DB.runDatabaseT (DB.find 1) connectionInfo
         phone `shouldSatisfy` isJust
-        phone' `shouldEqual` { id: 1, prefix: "+33", number: "123456789" }
+
+        let PhoneNumber { id, prefix, number } = unsafePartial $ fromJust phone
+
+        id `shouldEqual` 1
+        prefix `shouldEqual` "+33"
+        number `shouldEqual` "123456789"
 
     it "should retrieve an user with their id" do
       withDatabase \cs -> do
         let connectionInfo = PG.connectionInfoFromString cs
         DB.runDatabaseT DB.createTables connectionInfo
 
-        address <- DB.runDatabaseT (DB.persistAddress { id: 0, country: "France", street: "Street", city: "City", zip: "1234" }) connectionInfo
-        let address' = fromMaybe { id: 0, country: "", street: "", city: "", zip: "" } address
-        phone <- DB.runDatabaseT (DB.persistPhone { id: 0, prefix: "+33", number: "123456789" }) connectionInfo
-        let phone' = fromMaybe { id: 0, prefix: "", number: "" } phone
-        user <- DB.runDatabaseT (DB.persistUser { id: 0, firstname: "John", lastname: "Doe", address: (_.id address'), phonenumber: (_.id phone') }) connectionInfo
-        let user' = fromMaybe { id: 0, firstname: "", lastname: "", address: 0, phonenumber: 0 } user
+        address <- DB.runDatabaseT (DB.persist $ Address { id: 0, country: "France", street: "Street", city: "City", zip: "1234" }) connectionInfo
+        address `shouldSatisfy` isJust
+        let Address { id: addrId } = unsafePartial $ fromJust address
 
-        byId <- DB.runDatabaseT (DB.findUserById user'.id) connectionInfo
-        let byId' = fromMaybe { id: 0, firstname: "", lastname: "", address: address', phonenumber: phone' } byId
+        phone <- DB.runDatabaseT (DB.persist $ PhoneNumber { id: 0, prefix: "+33", number: "123456789" }) connectionInfo
+        phone `shouldSatisfy` isJust
+        let PhoneNumber { id: phoneId } = unsafePartial $ fromJust phone
+
+        user <- DB.runDatabaseT (DB.persist $ User { id: 0, firstname: "John", lastname: "Doe", address: addrId, phonenumber: phoneId }) connectionInfo
+        let User { id: userId } = unsafePartial $ fromJust user
+
+        byId <- DB.runDatabaseT (DB.find userId) connectionInfo
         byId `shouldSatisfy` isJust
-        byId' `shouldNotEqual` { id: 0, firstname: "", lastname: "", address: address', phonenumber: phone' }
-        byId'.address.country `shouldEqual` "France"
+        let (User { firstname, lastname, address, phonenumber }) = unsafePartial $ fromJust byId
+
+        firstname `shouldEqual` "John"
+        lastname `shouldEqual` "Doe"
+        address `shouldEqual` 1
+        phonenumber `shouldEqual` 1
 
     it "should persist an user with join" do
       withDatabase \cs -> do
@@ -177,18 +197,18 @@ testDatabase = do
         DB.runDatabaseT DB.createTables connectionInfo
 
         res <- DB.runDatabaseT
-          ( DB.persistUserWithJoin
+          ( DB.persistUserWithJoin $ UserWithJoin
               { id: 0
               , firstname: "newUser"
               , lastname: "lastName"
-              , address:
+              , address: Address
                   { id: 0
                   , country: "France"
                   , street: "SomeStreet"
                   , city: "Paris"
                   , zip: "92000"
                   }
-              , phonenumber:
+              , phonenumber: PhoneNumber
                   { id: 0
                   , prefix: "+33"
                   , number: "12345"
@@ -198,13 +218,46 @@ testDatabase = do
           connectionInfo
 
         res `shouldSatisfy` isJust
-        let finalResult = unsafePartial $ fromJust res
+        let UserWithJoin { id, address: Address { id: adid, country }, phonenumber: PhoneNumber { id: phid, prefix } } = unsafePartial $ fromJust res
 
-        finalResult.id `shouldEqual` 1
-        finalResult.address.id `shouldEqual` 1
-        finalResult.address.country `shouldEqual` "France"
-        finalResult.phonenumber.id `shouldEqual` 1
-        finalResult.phonenumber.prefix `shouldEqual` "+33"
+        id `shouldEqual` 1
+        adid `shouldEqual` 1
+        country `shouldEqual` "France"
+        phid `shouldEqual` 1
+        prefix `shouldEqual` "+33"
+
+    it "should retrieve an user with join" do
+      withDatabase \cs -> do
+        let connectionInfo = PG.connectionInfoFromString cs
+        DB.runDatabaseT DB.createTables connectionInfo
+        void $ DB.runDatabaseT
+          ( DB.persistUserWithJoin $ UserWithJoin
+              { id: 0
+              , firstname: "newUser"
+              , lastname: "lastName"
+              , address: Address
+                  { id: 0
+                  , country: "France"
+                  , street: "SomeStreet"
+                  , city: "Paris"
+                  , zip: "92000"
+                  }
+              , phonenumber: PhoneNumber
+                  { id: 0
+                  , prefix: "+33"
+                  , number: "12345"
+                  }
+              }
+          )
+          connectionInfo
+
+        withJoin <- DB.runDatabaseT (DB.findUserWithJoin 1) connectionInfo
+        withJoin `shouldSatisfy` isJust
+
+        let UserWithJoin { firstname, address: Address { country }, phonenumber: PhoneNumber { number } } = unsafePartial $ fromJust withJoin
+        firstname `shouldEqual` "newUser"
+        country `shouldEqual` "France"
+        number `shouldEqual` "12345"
 
     it "should count users" do
       withDatabase \cs -> do
@@ -212,58 +265,119 @@ testDatabase = do
         DB.runDatabaseT
           ( do
               DB.createTables
-              void $ DB.persistPhone { id: 0, prefix: "+33", number: "123456789" }
-              void $ DB.persistAddress { id: 0, country: "France", street: "Street", city: "City", zip: "1234" }
+              void $ DB.persist $ PhoneNumber { id: 0, prefix: "+33", number: "123456789" }
+              void $ DB.persist $ Address { id: 0, country: "France", street: "Street", city: "City", zip: "1234" }
           )
           connectionInfo
 
         firstCount <- DB.runDatabaseT DB.countUsers connectionInfo
-        traverse_ (\u -> DB.runDatabaseT (DB.persistUser u) connectionInfo)
-          [ { id: 0
-            , firstname: "John"
-            , lastname: "Doe"
-            , address: 1
-            , phonenumber: 1
-            }
-          , { id: 0
-            , firstname: "Jane"
-            , lastname: "Doe"
-            , address: 1
-            , phonenumber: 1
-            }
+        traverse_ (\u -> DB.runDatabaseT (DB.persist u) connectionInfo)
+          [ User
+              { id: 0
+              , firstname: "John"
+              , lastname: "Doe"
+              , address: 1
+              , phonenumber: 1
+              }
+          , User
+              { id: 0
+              , firstname: "Jane"
+              , lastname: "Doe"
+              , address: 1
+              , phonenumber: 1
+              }
           ]
 
         secondCount <- DB.runDatabaseT DB.countUsers connectionInfo
         firstCount `shouldEqual` 0
         secondCount `shouldEqual` 2
 
+    it "should count addresses" do
+      withDatabase \cs -> do
+        let connectionInfo = PG.connectionInfoFromString cs
+
+        ci <- DB.runDatabaseT
+          ( do
+              DB.createTables
+              initialCount <- DB.countAddresses
+              void $ DB.persist $ Address { id: 0, country: "c0", street: "s0", city: "c0", zip: "z0" }
+              void $ DB.persist $ Address { id: 0, country: "c1", street: "s1", city: "c1", zip: "z1" }
+              pure initialCount
+          )
+          connectionInfo
+
+        secondCount <- DB.runDatabaseT DB.countAddresses connectionInfo
+        ci `shouldEqual` 0
+        secondCount `shouldEqual` 2
+
+    it "should count phonenumbers" do
+      withDatabase \cs -> do
+        let connectionInfo = PG.connectionInfoFromString cs
+
+        ci <- DB.runDatabaseT
+          ( do
+              DB.createTables
+              initialCount <- DB.countPhoneNumbers
+              void $ DB.persist $ PhoneNumber { id: 0, number: "1234", prefix: "+33" }
+              void $ DB.persist $ PhoneNumber { id: 0, number: "1235", prefix: "+34" }
+              pure initialCount
+          )
+          connectionInfo
+
+        secondCount <- DB.runDatabaseT DB.countPhoneNumbers connectionInfo
+        ci `shouldEqual` 0
+        secondCount `shouldEqual` 2
+
     it "should update address" do
-       withDatabase \cs -> do
+      withDatabase \cs -> do
         let connectionInfo = PG.connectionInfoFromString cs
         DB.runDatabaseT DB.createTables connectionInfo
 
-        addr <- DB.runDatabaseT (DB.persistAddress { id: 0, country: "France", street: "Street", city: "City", zip: "1234" }) connectionInfo
-        let addr' = unsafePartial $ fromJust addr
+        addr <- DB.runDatabaseT (DB.persist $ Address { id: 0, country: "France", street: "Street", city: "City", zip: "1234" }) connectionInfo
+        let Address { id: oldId, city: oldCity, zip: oldZip } = unsafePartial $ fromJust addr
 
-        result <- DB.runDatabaseT (DB.updateAddress { id: addr'.id, country: "Italy", street: "Different", city: addr'.city, zip: addr'.zip }) connectionInfo
+        result <- DB.runDatabaseT (DB.update $ Address { id: oldId, country: "Italy", street: "Different", city: oldCity, zip: oldZip }) connectionInfo
         result `shouldSatisfy` isJust
 
-        let result' = unsafePartial $ fromJust result
-        result'.country `shouldEqual` "Italy"
-        result'.street `shouldEqual` "Different"
-        result'.zip `shouldEqual` "1234"
+        let Address { country, street, zip } = unsafePartial $ fromJust result
+        country `shouldEqual` "Italy"
+        street `shouldEqual` "Different"
+        zip `shouldEqual` "1234"
 
     it "should update phone" do
       withDatabase \cs -> do
         let connectionInfo = PG.connectionInfoFromString cs
         DB.runDatabaseT DB.createTables connectionInfo
 
-        phone <- DB.runDatabaseT (DB.persistPhone { id: 0, prefix: "+33", number: "123456789" }) connectionInfo
-        let phone' = unsafePartial $ fromJust phone
+        phone <- DB.runDatabaseT (DB.persist $ PhoneNumber { id: 0, prefix: "+33", number: "123456789" }) connectionInfo
+        let PhoneNumber { id: oldId } = unsafePartial $ fromJust phone
 
-        result <- DB.runDatabaseT (DB.updatePhone { id: phone'.id, prefix: "+44", number: "987654321" }) connectionInfo
+        result <- DB.runDatabaseT (DB.update $ PhoneNumber { id: oldId, prefix: "+44", number: "987654321" }) connectionInfo
         result `shouldSatisfy` isJust
 
-        let result' = unsafePartial $ fromJust result
-        result'.prefix `shouldEqual` "+44"
-        result'.number `shouldEqual` "987654321"
+        let PhoneNumber { prefix, number } = unsafePartial $ fromJust result
+        prefix `shouldEqual` "+44"
+        number `shouldEqual` "987654321"
+
+    it "should update user" do
+      withDatabase \cs -> do
+        let connectionInfo = PG.connectionInfoFromString cs
+        currentUser <- DB.runDatabaseT
+          ( do
+              DB.createTables
+              void $ DB.persist $ Address { id: 0, country: "France", city: "Valbonne", street: "SomeStreet", zip: "06560" }
+              void $ DB.persist $ PhoneNumber { id: 0, prefix: "+33", number: "0612345678" }
+              DB.persist $ User { id: 0, firstname: "John", lastname: "Doe", address: 1, phonenumber: 1 }
+          )
+          connectionInfo
+
+        let (User { id: uid, address, phonenumber }) = unsafePartial $ fromJust currentUser
+        uid `shouldEqual` 1
+
+        modified <- DB.runDatabaseT (DB.update $ User { id: uid, firstname: "Jim", lastname: "Big", address, phonenumber }) connectionInfo
+        modified `shouldSatisfy` isJust
+
+        let (User { id: newId, firstname, lastname }) = unsafePartial $ fromJust modified
+        firstname `shouldEqual` "Jim"
+        lastname `shouldEqual` "Big"
+        newId `shouldEqual` uid
