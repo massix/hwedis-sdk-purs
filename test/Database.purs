@@ -3,7 +3,7 @@ module Test.Database where
 import Prelude
 
 import Data.Argonaut (class DecodeJson, Json, JsonDecodeError, decodeJson, printJsonDecodeError)
-import Data.Array (length)
+import Data.Array (length, (..))
 import Data.Bifunctor (lmap)
 import Data.Either (Either)
 import Data.Foldable (traverse_)
@@ -62,12 +62,12 @@ withDatabase func = do
 testDatabase :: Spec Unit
 testDatabase = do
   describe "Database" do
-    it "should create tables if they do not exist" do
+    it "should create tables if they do not exist and not fail if they already exist" do
       withDatabase \cs -> do
         let connectionInfo = PG.connectionInfoFromString cs
 
         -- Here we create the tables
-        DB.runDatabaseT DB.createTables connectionInfo
+        traverse_ (\_ -> DB.runDatabaseT DB.createTables connectionInfo) [1 .. 1000]
 
         -- Make sure that the tables exist
         pool <- liftEffect $ YG.mkPool connectionInfo
