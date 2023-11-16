@@ -1,5 +1,6 @@
 {
   "dependencies": {
+    "pg": "^8.11.3",
     "testcontainers": "^10.2.2",
     "ws": "^8.14.2"
   }

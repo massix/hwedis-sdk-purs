@@ -12,7 +12,7 @@ import Test.Spec.Assertions (shouldEqual)
 
 testMessages :: SpecT Aff Unit Identity Unit
 testMessages = do
-  describe "Test Requests" do
+  describe "Message" do
     it "should render message to string" do
       show M.List `shouldEqual` "(List)"
       show (M.Get "1234") `shouldEqual` "(Get 1234)"

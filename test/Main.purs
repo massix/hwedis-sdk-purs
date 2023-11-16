@@ -5,6 +5,7 @@ import Prelude
 import Data.Maybe (Maybe(..))
 import Effect (Effect)
 import Effect.Aff (Milliseconds(..), launchAff_)
+import Test.Database (testDatabase)
 import Test.Messages (testMessages)
 import Test.Spec.Config (Config, defaultConfig)
 import Test.Spec.Reporter (consoleReporter)
@@ -15,6 +16,7 @@ main :: Effect Unit
 main = launchAff_ $ runSpec' testConfig [ consoleReporter ] do
   testMessages
   testWebSocket
+  testDatabase
 
   where
   testConfig :: Config

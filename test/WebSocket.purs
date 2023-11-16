@@ -2,9 +2,8 @@ module Test.WebSocket (testWebSocket) where
 
 import Prelude
 
-import Control.Promise (Promise, toAffE)
 import Data.Identity (Identity)
-import Data.Maybe (Maybe(..), fromMaybe, isNothing)
+import Data.Maybe (Maybe, fromMaybe, isNothing)
 import Effect (Effect)
 import Effect.Aff (Aff, error, throwError)
 import Effect.Aff.Class (liftAff)
@@ -12,50 +11,11 @@ import Effect.Class (liftEffect)
 import Network.WebSocket as WS
 import Test.Spec (SpecT, describe, it)
 import Test.Spec.Assertions (shouldEqual)
-
-foreign import data Container :: Type
-
-data GenericContainer
-  = StartedGenericContainer Container
-  | StoppedGenericContainer Container
-
-type GCConstructor = (Container -> GenericContainer)
-
--- TestContainers wrapper
-foreign import mkGenericContainerImpl :: GCConstructor -> String -> Effect GenericContainer
-foreign import startImpl :: GCConstructor -> Container -> Effect (Promise GenericContainer)
-foreign import stopImpl :: GCConstructor -> Container -> Effect (Promise GenericContainer)
-foreign import exposePortImpl :: GCConstructor -> Container -> Int -> Effect GenericContainer
-foreign import containerHostImpl :: Container -> Effect String
-foreign import containerPortImpl :: Container -> Int -> Effect Int
-
--- PURS Implementation
-mkGenericContainer :: String -> Effect GenericContainer
-mkGenericContainer image = mkGenericContainerImpl StoppedGenericContainer image
-
-stop :: GenericContainer -> Aff GenericContainer
-stop (StartedGenericContainer c) = toAffE $ stopImpl StoppedGenericContainer c
-stop x = pure x
-
-start :: GenericContainer -> Aff GenericContainer
-start (StoppedGenericContainer c) = toAffE $ startImpl StartedGenericContainer c
-start x = pure x
-
-containerHost :: GenericContainer -> Effect (Maybe String)
-containerHost (StartedGenericContainer c) = containerHostImpl c >>= (pure <<< Just)
-containerHost _ = pure Nothing
-
-containerPort :: GenericContainer -> Int -> Effect (Maybe Int)
-containerPort (StartedGenericContainer c) p = containerPortImpl c p >>= (pure <<< Just)
-containerPort _ _ = pure Nothing
-
-exposePort :: GenericContainer -> Int -> Effect GenericContainer
-exposePort (StoppedGenericContainer x) port = exposePortImpl StoppedGenericContainer x port
-exposePort _ _ = throwError $ error "Cannot expose a port of a started container"
+import Test.TestContainers (GenericContainer, containerHost, containerPort, exposePort, mkGenericContainer, start, stop)
 
 testWebSocket :: SpecT Aff Unit Identity Unit
 testWebSocket = do
-  describe "WebSocket Tests" do
+  describe "WebSocket" do
     it "should use websockets to communicate with an echo server" do
       container <- liftEffect $ (mkGenericContainer wsEcho) >>= (flip exposePort) 3000
       started <- liftAff $ start container
