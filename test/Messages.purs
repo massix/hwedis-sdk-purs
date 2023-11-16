@@ -12,7 +12,24 @@ import Test.Spec.Assertions (shouldEqual)
 
 testMessages :: SpecT Aff Unit Identity Unit
 testMessages = do
-  describe "Message" do
+  describe "Parse Messages" do
+    it "should be able to parse incoming messages" do
+      M.fromWsMessage "G::someobje::field1::value1::field2::value2" `shouldEqual` (Just $ M.GetR "someobje" [mkField "field1" "value1", mkField "field2" "value2"])
+      M.fromWsMessage "U::someobje" `shouldEqual` (Just $ M.UpdateR "someobje")
+      M.fromWsMessage "D::someobje" `shouldEqual` (Just $ M.DeleteR "someobje")
+      M.fromWsMessage "C::someobje" `shouldEqual` (Just $ M.CreateR "someobje")
+
+    it "should discard invalid messages" do
+      -- object id too short
+      (M.fromWsMessage "G::short::field1::value1" :: Maybe M.Response) `shouldEqual` Nothing
+      -- object id too long
+      (M.fromWsMessage "U::verylongobjectid" :: Maybe M.Response) `shouldEqual` Nothing
+      -- no fields
+      (M.fromWsMessage "G::someobje" :: Maybe M.Response) `shouldEqual` Nothing
+      -- odd fields, partial parsing
+      (M.fromWsMessage "G::someobje::field1::value1::field2" :: Maybe M.Response) `shouldEqual` (Just $ M.GetR "someobje" [mkField "field1" "value1"])
+
+  describe "Generate Messages" do
     it "should render message to string" do
       show M.List `shouldEqual` "(List)"
       show (M.Get "1234") `shouldEqual` "(Get 1234)"
