@@ -18,7 +18,6 @@ import Prelude
 import Data.Array (intercalate, uncons)
 import Data.Maybe (Maybe(..))
 import Data.String as String
-import Debug (trace)
 
 --------------------------------------------------------------------------------
 
