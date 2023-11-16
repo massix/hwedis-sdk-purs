@@ -87,30 +87,26 @@ instance ToWsMessage Request where
 
 instance FromWsMessage Response where
   fromWsMessage :: String -> Maybe Response
-  fromWsMessage msg =
-    let
-      f :: String -> Maybe { head :: String, tail :: Array String }
-      f = uncons <<< toSplitArray
+  fromWsMessage msg = do
+    { head: x, tail: xs } <- splitUncons msg
+    { head: xr, tail: xsr } <- uncons xs
+    validObjectId <- validateObjectId xr
 
-    in
-      do
-        { head: x, tail: xs } <- f msg
-        { head: xr, tail: xsr } <- uncons xs
-        validObjectId <- validateObjectId xr
-
-        case x of
-          "G" -> do
-            fields <- splitFields xsr
-            validFields <- validateFields fields
-            pure $ GetR xr validFields
-          "U" -> pure $ UpdateR validObjectId
-          "D" -> pure $ DeleteR validObjectId
-          "C" -> pure $ CreateR validObjectId
-          _ -> Nothing
+    case x of
+      "G" -> do
+        fields <- splitFields xsr >>= validateFields
+        pure $ GetR xr fields
+      "U" -> pure $ UpdateR validObjectId
+      "D" -> pure $ DeleteR validObjectId
+      "C" -> pure $ CreateR validObjectId
+      _ -> Nothing
 
     where
     toSplitArray :: String -> Array String
     toSplitArray = String.split (String.Pattern "::")
+
+    splitUncons :: String -> Maybe { head :: String, tail :: Array String }
+    splitUncons = uncons <<< toSplitArray
 
     splitFields :: Array String -> Maybe (Array Field)
     splitFields [] = pure []
