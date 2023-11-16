@@ -15,7 +15,8 @@ module Data.Messages
 
 import Prelude
 
-import Data.Array (intercalate, uncons)
+import Data.Array (intercalate, length, uncons)
+import Data.Int (odd)
 import Data.Maybe (Maybe(..))
 import Data.String as String
 
@@ -109,12 +110,14 @@ instance FromWsMessage Response where
     splitUncons = uncons <<< toSplitArray
 
     splitFields :: Array String -> Maybe (Array Field)
-    splitFields [] = pure []
-    splitFields arr = do
-      { head: key, tail: rest } <- uncons arr
-      { head: value, tail: xs } <- uncons rest
+    splitFields [] = Nothing
+    splitFields arr
+      | odd $ length arr = Nothing
+      | otherwise = do
+          { head: key, tail: rest } <- uncons arr
+          { head: value, tail: xs } <- uncons rest
 
-      pure [ { key, value } ] <> splitFields xs
+          pure [ { key, value } ] <> splitFields xs
 
 -- Helpers for ToWsMessage
 renderFields :: Array Field -> String

@@ -26,8 +26,8 @@ testMessages = do
       (M.fromWsMessage "U::verylongobjectid" :: Maybe M.Response) `shouldEqual` Nothing
       -- no fields
       (M.fromWsMessage "G::someobje" :: Maybe M.Response) `shouldEqual` Nothing
-      -- odd fields, partial parsing
-      (M.fromWsMessage "G::someobje::field1::value1::field2" :: Maybe M.Response) `shouldEqual` (Just $ M.GetR "someobje" [mkField "field1" "value1"])
+      -- odd fields
+      (M.fromWsMessage "G::someobje::field1::value1::field2" :: Maybe M.Response) `shouldEqual` Nothing
 
   describe "Generate Messages" do
     it "should render message to string" do
