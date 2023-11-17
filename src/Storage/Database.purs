@@ -1,9 +1,5 @@
 module Storage.Database
-  ( User(..)
-  , UserWithJoin(..)
-  , PhoneNumber(..)
-  , Address(..)
-  , class Persistable
+  ( class Persistable
   , class Updatable
   , class Findable
   , class Deletable
@@ -30,7 +26,7 @@ module Storage.Database
 import Prelude
 
 import Control.Monad.Reader (ReaderT, ask, runReaderT)
-import Data.Argonaut (class DecodeJson, Json, JsonDecodeError, decodeJson, printJsonDecodeError, (.:))
+import Data.Argonaut (class DecodeJson, JsonDecodeError, decodeJson, printJsonDecodeError)
 import Data.Array (head)
 import Data.Bifunctor (lmap)
 import Data.Either (Either)
@@ -41,6 +37,7 @@ import Effect.Aff (Aff, Error, bracket, error)
 import Effect.Aff.Class (liftAff)
 import Effect.Class (liftEffect)
 import Foreign (Foreign)
+import Storage.Types (Address(..), PhoneNumber(..), User(..), UserWithJoin(..))
 import Unsafe.Coerce (unsafeCoerce)
 import Yoga.Postgres (Query(..), connect, execute_, query, queryOne_, release) as YG
 import Yoga.Postgres as PG
@@ -63,42 +60,6 @@ class Findable t <= Updatable t where
 
 class Deletable t where
   deleteQuery :: t -> YGQuery t
-
--- This is our "model"
-newtype User = User
-  { id :: Int
-  , firstname :: String
-  , lastname :: String
-  , phonenumber :: Int -- ^ Foreign Key
-  , address :: Int -- ^ Foreign Key
-  }
-
-newtype PhoneNumber = PhoneNumber
-  { id :: Int
-  , prefix :: String
-  , number :: String
-  }
-
-newtype Address = Address
-  { id :: Int
-  , country :: String
-  , city :: String
-  , street :: String
-  , zip :: String
-  }
-
-newtype UserWithJoin = UserWithJoin
-  { id :: Int
-  , firstname :: String
-  , lastname :: String
-  , phonenumber :: PhoneNumber -- ^ Foreign Key
-  , address :: Address -- ^ Foreign Key
-  }
-
-derive newtype instance Show User
-derive newtype instance Show Address
-derive newtype instance Show PhoneNumber
-derive newtype instance Show UserWithJoin
 
 instance Persistable User where
   createQuery (User { firstname, lastname, phonenumber, address }) =
@@ -125,18 +86,6 @@ instance Deletable User where
     , params: [ YG.toSql id ]
     }
 
-instance DecodeJson User where
-  decodeJson :: Json -> Either JsonDecodeError User
-  decodeJson j = do
-    obj <- decodeJson j
-    id <- obj .: "id"
-    firstname <- obj .: "firstname"
-    lastname <- obj .: "lastname"
-    phonenumber <- obj .: "phonenumber"
-    address <- obj .: "address"
-
-    pure $ User { id, firstname, lastname, phonenumber, address }
-
 instance Persistable Address where
   createQuery (Address { country, city, street, zip }) =
     { query: YG.Query "insert into address (country, city, street, zip) values ($1, $2, $3, $4) returning *"
@@ -162,18 +111,6 @@ instance Deletable Address where
     , params: [ YG.toSql id ]
     }
 
-instance DecodeJson Address where
-  decodeJson :: Json -> Either JsonDecodeError Address
-  decodeJson j = do
-    obj <- decodeJson j
-    id <- obj .: "id"
-    country <- obj .: "country"
-    city <- obj .: "city"
-    street <- obj .: "street"
-    zip <- obj .: "zip"
-
-    pure $ Address { id, country, city, street, zip }
-
 instance Persistable PhoneNumber where
   createQuery (PhoneNumber { number, prefix }) =
     { query: YG.Query "insert into phone (number, prefix) values ($1, $2) returning *"
@@ -198,16 +135,6 @@ instance Deletable PhoneNumber where
     { query: YG.Query "delete from phone where id = $1 returning *"
     , params: [ YG.toSql id ]
     }
-
-instance DecodeJson PhoneNumber where
-  decodeJson :: Json -> Either JsonDecodeError PhoneNumber
-  decodeJson j = do
-    obj <- decodeJson j
-    id <- obj .: "id"
-    number <- obj .: "number"
-    prefix <- obj .: "prefix"
-
-    pure $ PhoneNumber { id, number, prefix }
 
 runDatabaseT :: ∀ a. DatabaseT a -> PG.ConnectionInfo -> Aff a
 runDatabaseT m ci = bracket (liftEffect $ PG.mkPool ci) (PG.end >>> liftEffect) (runReaderT m)
