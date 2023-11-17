@@ -18,6 +18,7 @@ testMessages = do
       M.fromWsMessage "U::someobje" `shouldEqual` (Just $ M.UpdateR "someobje")
       M.fromWsMessage "D::someobje" `shouldEqual` (Just $ M.DeleteR "someobje")
       M.fromWsMessage "C::someobje" `shouldEqual` (Just $ M.CreateR "someobje")
+      M.fromWsMessage "#f" `shouldEqual` Just M.False
 
     it "should discard invalid messages" do
       -- object id too short

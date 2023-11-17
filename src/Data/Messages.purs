@@ -37,6 +37,7 @@ data Response
   | CreateR ObjectId
   | UpdateR ObjectId
   | DeleteR ObjectId
+  | False
 
 class (Show a) <= ToWsMessage a where
   toWsMessage :: a -> String
@@ -61,6 +62,7 @@ instance Show Response where
   show (CreateR id) = "(CreateR " <> id <> ")"
   show (UpdateR id) = "(UpdateR " <> id <> ")"
   show (DeleteR id) = "(DeleteR " <> id <> ")"
+  show False = "(False)"
 
 -- Helpers for Show
 fieldToString :: Field -> String
@@ -88,6 +90,7 @@ instance ToWsMessage Request where
 
 instance FromWsMessage Response where
   fromWsMessage :: String -> Maybe Response
+  fromWsMessage "#f" = Just False
   fromWsMessage msg = do
     { head: x, tail: xs } <- splitUncons msg
     { head: xr, tail: xsr } <- uncons xs
