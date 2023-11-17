@@ -21,6 +21,8 @@ module Storage.Database
   , countAddresses
   , countPhoneNumbers
   , findUserWithJoin
+  , cleanDatabase
+  , dropTables
   ) where
 
 import Prelude
@@ -30,13 +32,12 @@ import Data.Argonaut (class DecodeJson, JsonDecodeError, decodeJson, printJsonDe
 import Data.Array (head)
 import Data.Bifunctor (lmap)
 import Data.Either (Either)
-import Data.Int (round)
 import Data.Maybe (Maybe(..))
-import Data.Number (isNaN)
 import Effect.Aff (Aff, Error, bracket, error)
 import Effect.Aff.Class (liftAff)
 import Effect.Class (liftEffect)
 import Foreign (Foreign)
+import Misc.Utils (Radix(..), parseInt)
 import Storage.Types (Address(..), PhoneNumber(..), User(..), UserWithJoin(..))
 import Unsafe.Coerce (unsafeCoerce)
 import Yoga.Postgres (Query(..), connect, execute_, query, queryOne_, release) as YG
@@ -230,23 +231,6 @@ findUserWithJoin userId = do
     ad <- a
     pure $ UserWithJoin { id, firstname, lastname, phonenumber: ph, address: ad }
 
-foreign import parseIntImpl :: String -> Int -> Number
-
-newtype Radix = Radix Int
-
-parseInt :: Radix -> String -> Maybe Int
-parseInt (Radix r) n =
-  let
-    result = parseIntImpl n r
-  in
-    if r >= 2 && r <= 36 then
-      if isNaN result then
-        Nothing
-      else
-        Just $ round result
-    else
-      Nothing
-
 count_ :: String -> DatabaseT Int
 count_ table = do
   pool <- ask
@@ -270,6 +254,18 @@ countAddresses = count_ "address"
 
 countPhoneNumbers :: DatabaseT Int
 countPhoneNumbers = count_ "phone"
+
+cleanDatabase :: DatabaseT Unit
+cleanDatabase = do
+  pool <- ask
+  liftAff $ withPool pool $ \c -> do
+    YG.execute_ (YG.Query "truncate table \"user\", phone, address") c
+
+dropTables :: DatabaseT Unit
+dropTables = do
+  pool <- ask
+  liftAff $ withPool pool $ \c -> do
+    YG.execute_ (YG.Query "drop table if exists \"user\", phone, address") c
 
 fromDbResult :: ∀ a. DecodeJson a => Foreign -> Either Error a
 fromDbResult = unsafeCoerce >>> decodeJson >>> lmap toError
