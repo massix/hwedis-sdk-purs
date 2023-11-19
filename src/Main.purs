@@ -6,18 +6,19 @@ import Control.Monad.Reader (ask, runReaderT)
 import Control.Monad.Rec.Class (forever)
 import Control.Monad.State (get, put)
 import Data.Argonaut (class DecodeJson, decodeJson, parseJson)
-import Data.Array ((..))
+import Data.Array (foldr, (..))
 import Data.Either (Either(..))
 import Data.Foldable (traverse_)
 import Data.Maybe (Maybe(..))
+import Data.Traversable (traverse)
 import Data.Tuple (Tuple(..))
 import Effect (Effect)
-import Effect.Aff (error, forkAff, joinFiber, killFiber, launchAff_)
+import Effect.Aff (Aff, Milliseconds(..), delay, error, forkAff, joinFiber, killFiber, launchAff_)
 import Effect.Aff.Class (liftAff)
 import Effect.Class (class MonadEffect, liftEffect)
 import Effect.Console as Console
 import Effect.Random (randomInt)
-import Monad.Bench (AppM, CacheStats, getCache, getDb, log, putCache, runAppM, updateCache, updateDb)
+import Monad.Bench (AppM, CacheStats, AppState, getCache, getDb, log, putCache, runAppM, updateCache, updateDb)
 import Network.WebSocket as WS
 import Node.Buffer (toString)
 import Node.Encoding (Encoding(..))
@@ -192,13 +193,13 @@ program = do
             log "User was in cache, updating"
             updateDb pool newUser
             updateCache ws newUser
-            put { users: putCacheHit users, addresses, phones}
+            put { users: putCacheHit users, addresses, phones }
           Db (User { id: uid, firstname, lastname, address, phonenumber }) -> do
             let newUser = User { id: uid, firstname: firstname <> " modified", lastname: lastname <> " modified", address, phonenumber }
             log "User was in DB, creating new entry"
             updateDb pool newUser
             putCache ws newUser
-            put { users: putCacheMiss users, addresses, phones}
+            put { users: putCacheMiss users, addresses, phones }
       UpdateAddress id -> do
         log $ "Updating address with id: " <> show id
         a <- getAddressFromCacheOrDb id
@@ -240,16 +241,19 @@ receiver = forever $ do
   msg <- liftAff $ WS.recv ws
   log $ "Received: " <> show msg
 
+newtype Iterations = Iterations Int
+newtype ClientId = ClientId String
+
 main :: Effect Unit
 main = launchAff_ $ do
-  ws <- WS.mkWebSocket "ws://127.0.0.1:9092" "hwedis-sdk"
-  pool <- liftEffect $ YG.mkPool createConnectionInfo
-  let iterations = 1000
+  let iterations = 500
 
   -- Read data files
   usersFromFile <- readUser "./data/users.json"
   addressesFromFile <- readAddress "./data/address.json"
   phonesFromFile <- readPhone "./data/phonenumber.json"
+
+  pool <- liftEffect $ YG.mkPool createConnectionInfo
 
   liftEffect $ Console.log "Populating database"
   flip runReaderT pool $ do
@@ -260,27 +264,53 @@ main = launchAff_ $ do
     traverse_ DB.persist phonesFromFile
     traverse_ DB.persist usersFromFile
 
-  let initStatus = { cacheHit: 0, cacheMiss: 0 }
-  let st = { users: initStatus, addresses: initStatus, phones: initStatus }
+  liftEffect $ YG.end pool
 
-  -- Fork different Aff contexts
-  t <- forkAff $ do
-    newWs <- WS.mkWebSocket "ws://127.0.0.1:9092" "client1"
+  let
+    benchFunction c = do
+      delay (Milliseconds 250.0)
+      forkAff $ bencher (Iterations iterations) (ClientId $ "Client" <> show c)
+
+  arrFiber <- traverse benchFunction (1 .. 5)
+  arrResults <- traverse joinFiber arrFiber
+
+  -- Print statistics:
+  liftEffect $ printStats (aggregateStats $ map (\(Tuple _ stats) -> stats) arrResults)
+
+  where
+  createConnectionInfo :: YG.ConnectionInfo
+  createConnectionInfo = YG.connectionInfoFromString "postgres://test:test@localhost:5432/test"
+
+  bencher :: Iterations -> ClientId -> Aff (Tuple Unit AppState)
+  bencher (Iterations i) (ClientId c) = do
+    let initStatus = { cacheHit: 0, cacheMiss: 0 }
+    let st = { users: initStatus, addresses: initStatus, phones: initStatus }
+
+    newWs <- WS.mkWebSocket "ws://127.0.0.1:9092" c
     newPool <- liftEffect $ YG.mkPool createConnectionInfo
 
-    res <- runAppM program st { ws: newWs, pool: newPool, iterations }
+    res <- runAppM program st { ws: newWs, pool: newPool, iterations: i }
 
     void $ WS.close newWs 1000 "Goodbye!"
     liftEffect $ YG.end newPool
     pure res
 
-  Tuple _ { users, addresses, phones} <- joinFiber t
+  aggregateStats :: Array AppState -> AppState
+  aggregateStats arr =
+    let
+      sumStats :: CacheStats -> CacheStats -> CacheStats
+      sumStats { cacheHit: aCh, cacheMiss: aCm } { cacheHit: bCh, cacheMiss: bCm } = { cacheHit: aCh + bCh, cacheMiss: aCm + bCm }
 
-  void $ WS.close ws 1000 "Goodbye!"
-  liftEffect $ YG.end pool
+      sumFull :: AppState -> AppState -> AppState
+      sumFull { users: au, addresses: aa, phones: ap } { users: bu, addresses: ba, phones: bp } =
+        { users: sumStats au bu, addresses: sumStats aa ba, phones: sumStats ap bp }
 
-  -- Print statistics:
-  liftEffect $ do
+      statsZero = { cacheHit: 0, cacheMiss: 0 }
+    in
+      foldr sumFull { users: statsZero, addresses: statsZero, phones: statsZero } arr
+
+  printStats :: AppState -> Effect Unit
+  printStats { users, addresses, phones } = do
     Console.log $ "_________________________________________"
     Console.log $ " Users:"
     Console.log $ "   - Hit  : " <> show users.cacheHit
@@ -301,8 +331,4 @@ main = launchAff_ $ do
     Console.log $ " Total Misses: " <> show (users.cacheMiss + addresses.cacheMiss + phones.cacheMiss)
     Console.log $ "________________________________________"
     Console.log $ " # Iterations: " <> show (users.cacheHit + users.cacheMiss + addresses.cacheHit + addresses.cacheMiss + phones.cacheHit + phones.cacheMiss)
-
-  where
-  createConnectionInfo :: YG.ConnectionInfo
-  createConnectionInfo = YG.connectionInfoFromString "postgres://test:test@localhost:5432/test"
 
