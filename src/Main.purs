@@ -1,26 +1,24 @@
 module Main where
 
-import Prelude hiding (($>))
+import Prelude
 
-import Control.Monad.Reader (ReaderT, ask, lift, runReaderT)
+import Control.Monad.Reader (ask, runReaderT)
+import Control.Monad.Rec.Class (forever)
+import Control.Monad.State (get, put)
 import Data.Argonaut (class DecodeJson, decodeJson, parseJson)
-import Data.DateTime (Date, DateTime, Time, date, day, hour, millisecond, minute, month, second, time, year)
+import Data.Array ((..))
 import Data.Either (Either(..))
-import Data.Enum (fromEnum)
 import Data.Foldable (traverse_)
 import Data.Maybe (Maybe(..))
-import Data.Messages (class FromWsMessage, class ToWsMessage, Request(..), Response(..), fromWsMessage, toWsMessage)
-import Data.String (Pattern(..), Replacement(..), replaceAll)
-import Data.String.Utils (padStart)
+import Data.Tuple (Tuple(..))
 import Effect (Effect)
-import Effect.Aff (Aff, Milliseconds(..), delay, forkAff, joinFiber, launchAff_)
+import Effect.Aff (error, forkAff, joinFiber, killFiber, launchAff_)
 import Effect.Aff.Class (liftAff)
-import Effect.Class (liftEffect)
-import Effect.Console (log, logShow)
-import Effect.Now (nowDateTime)
-import Effect.Random as R
-import Misc.Utils (Radix(..), parseInt)
-import Network.WebSocket (WebSocket, close, mkWebSocket, recv, send)
+import Effect.Class (class MonadEffect, liftEffect)
+import Effect.Console as Console
+import Effect.Random (randomInt)
+import Monad.Bench (AppM, CacheStats, getCache, getDb, log, putCache, runAppM, updateCache, updateDb)
+import Network.WebSocket as WS
 import Node.Buffer (toString)
 import Node.Encoding (Encoding(..))
 import Node.FS.Sync (readFile)
@@ -28,284 +26,283 @@ import Storage.Database as DB
 import Storage.Types (Address(..), PhoneNumber(..), User(..))
 import Yoga.Postgres as YG
 
-newtype ApplicationEnvironment =
-  ApplicationEnvironment { ws :: WebSocket, pool :: YG.Pool }
+data FoundWhere a = Cache a | Db a | Nowhere
 
-type ApplicationT a = ReaderT WebSocket (ReaderT YG.Pool Aff) a
+getUserFromCacheOrDb :: Int -> AppM (FoundWhere User)
+getUserFromCacheOrDb id = do
+  { ws, pool } <- ask
+  user <- getCache ws id
 
--- Fake get requests
-data GeneratedRequest
-  = GetAddress String
-  | GetPhone String
-  | GetUser String
+  case user of
+    Nothing -> do
+      log "Could not find user in cache, reverting to DB"
+      fromDb <- getDb pool id
+      case fromDb of
+        Nothing -> pure Nowhere
+        Just x -> pure $ Db x
 
-mapObjectId :: (String -> String) -> GeneratedRequest -> GeneratedRequest
-mapObjectId f (GetAddress id) = GetAddress (f id)
-mapObjectId f (GetPhone id) = GetPhone (f id)
-mapObjectId f (GetUser id) = GetUser (f id)
+    Just x -> do
+      log "User found in cache"
+      pure $ Cache x
 
-getObjectId :: GeneratedRequest -> String
-getObjectId (GetAddress id) = id
-getObjectId (GetPhone id) = id
-getObjectId (GetUser id) = id
+getAddressFromCacheOrDb :: Int -> AppM (FoundWhere Address)
+getAddressFromCacheOrDb id = do
+  { ws, pool } <- ask
+  address <- getCache ws id
 
-infix 5 mapObjectId as $>
+  case address of
+    Nothing -> do
+      log "Could not find address in cache, reverting to DB"
+      fromDb <- getDb pool id
+      case fromDb of
+        Nothing -> pure Nowhere
+        Just x -> pure $ Db x
+    Just x -> do
+      log "Address found in cache"
+      pure $ Cache x
 
-instance Show GeneratedRequest where
-  show (GetAddress id) = "(GetAddress " <> id <> ")"
-  show (GetPhone id) = "(GetPhone " <> id <> ")"
-  show (GetUser id) = "(GetUser " <> id <> ")"
+getPhoneFromCacheOrDb :: Int -> AppM (FoundWhere PhoneNumber)
+getPhoneFromCacheOrDb id = do
+  { ws, pool } <- ask
+  phone <- getCache ws id
 
-type PadSize = Int
+  case phone of
+    Nothing -> do
+      log "Could not find phone in cache, reverting to DB"
+      fromDb <- getDb pool id
+      case fromDb of
+        Nothing -> pure Nowhere
+        Just x -> pure $ Db x
+    Just x -> do
+      log "Phone found in cache"
+      pure $ Cache x
 
--- Converts an ObjectId from an Int to a 8-char length string for interoperation with Hwedis
--- Last byte is reserved for object type (will be set by user)
-padObjectId :: PadSize -> Int -> String
-padObjectId ps = show >>> padStart ps >>> replaceAll (Pattern " ") (Replacement "0")
+data FakeRequest
+  = GetUser Int
+  | GetPhone Int
+  | GetAddress Int
+  | UpdateUser Int
+  | UpdatePhone Int
+  | UpdateAddress Int
 
--- Reverse of padObjectId
-unPadObjectId :: String -> Maybe Int
-unPadObjectId = parseInt (Radix 10)
-
-generateRandomRequest :: Effect GeneratedRequest
+generateRandomRequest :: ∀ m. (MonadEffect m) => m FakeRequest
 generateRandomRequest = do
-  rnd <- R.randomInt 0 2
-  rndId <- R.randomInt 1 1000
+  { id, req } <- liftEffect $ do
+    id <- randomInt 1 1000
+    req <- randomInt 1 6
+    pure { id, req }
 
-  case rnd of
-    0 -> pure $ GetAddress (padObjectId 7 rndId)
-    1 -> pure $ GetPhone (padObjectId 7 rndId)
-    _ -> pure $ GetUser (padObjectId 7 rndId)
+  case req of
+    1 -> pure $ GetUser id
+    2 -> pure $ GetPhone id
+    3 -> pure $ GetAddress id
+    4 -> pure $ UpdateUser id
+    5 -> pure $ UpdatePhone id
+    _ -> pure $ UpdateAddress id
 
-runApplication :: ApplicationEnvironment -> ApplicationT ~> Aff
-runApplication (ApplicationEnvironment { ws, pool }) m = runReaderT (runReaderT m ws) pool
-
-readUser :: String -> Effect (Array User)
+readUser :: ∀ m. MonadEffect m => String -> m (Array User)
 readUser = readDataFile
 
-readPhone :: String -> Effect (Array PhoneNumber)
+readPhone :: ∀ m. MonadEffect m => String -> m (Array PhoneNumber)
 readPhone = readDataFile
 
-readAddress :: String -> Effect (Array Address)
+readAddress :: ∀ m. MonadEffect m => String -> m (Array Address)
 readAddress = readDataFile
 
-readDataFile :: ∀ a. DecodeJson a => String -> Effect (Array a)
+readDataFile :: ∀ a m. MonadEffect m => DecodeJson a => String -> m (Array a)
 readDataFile path = do
-  f <- readFile path >>= toString UTF8
+  f <- liftEffect $ readFile path >>= toString UTF8
   let parsedResult = parseJson f >>= decodeJson
 
   case parsedResult of
     Left err -> do
-      logShow err
+      liftEffect $ Console.log $ show err
       pure []
     Right x -> pure x
 
-l :: String -> Effect Unit
-l logMsg = do
-  time <- nowDateTime
-  log $ "[" <> showDateTime time <> "] " <> logMsg
+program :: AppM Unit
+program = do
+  s <- get
+  e@{ iterations } <- ask
 
-showDateTime :: DateTime -> String
-showDateTime x =
-  showDate (date x) <> " " <> showTime (time x)
+  -- Start the receiver in a separate Aff context
+  fiber <- liftAff $ forkAff (runAppM receiver s e)
+
+  runLoop iterations 0
+
+  -- Kill the receiver
+  liftAff $ killFiber (error "I HATE YOU!") fiber
 
   where
-  showTime :: Time -> String
-  showTime t =
-    show (fromEnum $ hour t)
-      <> ":"
-      <> show (fromEnum $ minute t)
-      <> ":"
-      <> show (fromEnum $ second t)
-      <> "."
-      <> show (fromEnum $ millisecond t)
+  putCacheHit :: CacheStats -> CacheStats
+  putCacheHit { cacheHit, cacheMiss } = { cacheHit: cacheHit + 1, cacheMiss }
 
-  showDate :: Date -> String
-  showDate d =
-    show (fromEnum $ year d)
-      <> "-"
-      <> show (fromEnum $ month d)
-      <> "-"
-      <> show (fromEnum $ day d)
+  putCacheMiss :: CacheStats -> CacheStats
+  putCacheMiss { cacheHit, cacheMiss } = { cacheHit, cacheMiss: cacheMiss + 1 }
+
+  runLoop :: Int -> Int -> AppM Unit
+  runLoop limit count = when (count < limit) $ do
+    { ws, pool } <- ask
+    { users, addresses, phones } <- get
+
+    log $ "Iteration #" <> show count
+
+    randomRequest <- generateRandomRequest
+    case randomRequest of
+      GetUser id -> do
+        u <- getUserFromCacheOrDb id
+        case u of
+          Nowhere -> pure unit
+          Cache x -> do
+            put { users: putCacheHit users, addresses, phones }
+            log $ "Cache: " <> show x
+          Db x -> do
+            put { users: putCacheMiss users, addresses, phones }
+            log $ "DB: " <> show x
+            putCache ws x
+      GetAddress id -> do
+        a <- getAddressFromCacheOrDb id
+        case a of
+          Nowhere -> pure unit
+          Cache x -> do
+            put { users, addresses: putCacheHit addresses, phones }
+            log $ "Cache: " <> show x
+          Db x -> do
+            put { users, addresses: putCacheMiss addresses, phones }
+            log $ "DB: " <> show x
+            putCache ws x
+      GetPhone id -> do
+        p <- getPhoneFromCacheOrDb id
+        case p of
+          Nowhere -> pure unit
+          Cache x -> do
+            put { users, addresses, phones: putCacheHit phones }
+            log $ "Cache: " <> show x
+          Db x -> do
+            put { users, addresses, phones: putCacheMiss phones }
+            log $ "DB: " <> show x
+            putCache ws x
+      UpdateUser id -> do
+        log $ "Updating user with id: " <> show id
+        u <- getUserFromCacheOrDb id
+        case u of
+          Nowhere -> log "Could not find user to update"
+          Cache (User { id: uid, firstname, lastname, address, phonenumber }) -> do
+            let newUser = User { id: uid, firstname: firstname <> " modified", lastname: lastname <> " modified", address, phonenumber }
+            log "User was in cache, updating"
+            updateDb pool newUser
+            updateCache ws newUser
+            put { users: putCacheHit users, addresses, phones}
+          Db (User { id: uid, firstname, lastname, address, phonenumber }) -> do
+            let newUser = User { id: uid, firstname: firstname <> " modified", lastname: lastname <> " modified", address, phonenumber }
+            log "User was in DB, creating new entry"
+            updateDb pool newUser
+            putCache ws newUser
+            put { users: putCacheMiss users, addresses, phones}
+      UpdateAddress id -> do
+        log $ "Updating address with id: " <> show id
+        a <- getAddressFromCacheOrDb id
+        case a of
+          Nowhere -> log "Could not find address to update"
+          Cache (Address { id: aid, street, city, zip, country }) -> do
+            let newAddress = Address { id: aid, street: street <> " modified", city: city <> " modified", zip, country }
+            updateDb pool newAddress
+            updateCache ws newAddress
+            put { users, addresses: putCacheHit addresses, phones }
+          Db (Address { id: aid, street, city, zip, country }) -> do
+            let newAddress = Address { id: aid, street: street <> " modified", city: city <> " modified", zip, country }
+            updateDb pool newAddress
+            putCache ws newAddress
+            put { users, addresses: putCacheMiss addresses, phones }
+      UpdatePhone id -> do
+        log $ "Updating phone with id: " <> show id
+        p <- getPhoneFromCacheOrDb id
+        case p of
+          Nowhere -> log "Could not find phone to update"
+          Cache (PhoneNumber { id: pid, number, prefix }) -> do
+            let newPhone = PhoneNumber { id: pid, number: number <> " modified", prefix }
+            updateDb pool newPhone
+            updateCache ws newPhone
+            put { users, addresses, phones: putCacheHit phones }
+          Db (PhoneNumber { id: pid, number, prefix }) -> do
+            let newPhone = PhoneNumber { id: pid, number: number <> " modified", prefix }
+            updateDb pool newPhone
+            putCache ws newPhone
+            put { users, addresses, phones: putCacheMiss phones }
+
+    runLoop limit (count + 1)
+
+-- | Receiver: this function runs in an Aff context, always listening for messages coming from
+-- | the websocket and modifying the state in consequence. This fiber will never end.
+receiver :: AppM Unit
+receiver = forever $ do
+  { ws } <- ask
+  msg <- liftAff $ WS.recv ws
+  log $ "Received: " <> show msg
 
 main :: Effect Unit
-main = do
-  address <- readAddress "./data/address.json"
-  phones <- readPhone "./data/phonenumber.json"
-  user <- readUser "./data/users.json"
+main = launchAff_ $ do
+  ws <- WS.mkWebSocket "ws://127.0.0.1:9092" "hwedis-sdk"
+  pool <- liftEffect $ YG.mkPool createConnectionInfo
+  let iterations = 1000
 
-  launchAff_ do
-    ws <- mkWebSocket "ws://127.0.0.1:9092" "hwedis-sdk"
-    pool <- liftEffect $ YG.mkPool createConnectionInfo
+  -- Read data files
+  usersFromFile <- readUser "./data/users.json"
+  addressesFromFile <- readAddress "./data/address.json"
+  phonesFromFile <- readPhone "./data/phonenumber.json"
 
-    liftEffect $ l "Populating database"
+  liftEffect $ Console.log "Populating database"
+  flip runReaderT pool $ do
+    DB.dropTables
+    DB.createTables
 
-    -- Drop tables
-    liftEffect $ l "Dropping tables"
-    runReaderT DB.dropTables pool
+    traverse_ DB.persist addressesFromFile
+    traverse_ DB.persist phonesFromFile
+    traverse_ DB.persist usersFromFile
 
-    -- Create tables
-    liftEffect $ l "Creating tables"
-    runReaderT DB.createTables pool
+  let initStatus = { cacheHit: 0, cacheMiss: 0 }
+  let st = { users: initStatus, addresses: initStatus, phones: initStatus }
 
-    -- Populate database with mock data
-    liftEffect $ l "Creating addresses"
-    ad <- forkAff $ runReaderT (populateDatabase address) pool
+  -- Fork different Aff contexts
+  t <- forkAff $ do
+    newWs <- WS.mkWebSocket "ws://127.0.0.1:9092" "client1"
+    newPool <- liftEffect $ YG.mkPool createConnectionInfo
 
-    liftEffect $ l "Creating phones"
-    ph <- forkAff $ runReaderT (populateDatabase phones) pool
+    res <- runAppM program st { ws: newWs, pool: newPool, iterations }
 
-    liftEffect $ l "Joining fibers"
-    traverse_ joinFiber [ ad, ph ]
+    void $ WS.close newWs 1000 "Goodbye!"
+    liftEffect $ YG.end newPool
+    pure res
 
-    liftEffect $ l "Creating users"
-    runReaderT (populateDatabase user) pool
+  Tuple _ { users, addresses, phones} <- joinFiber t
 
-    { cu, ca, cp } <- do
-      cu <- runReaderT DB.countUsers pool
-      ca <- runReaderT DB.countAddresses pool
-      cp <- runReaderT DB.countPhoneNumbers pool
-      pure $ { cu, ca, cp }
+  void $ WS.close ws 1000 "Goodbye!"
+  liftEffect $ YG.end pool
 
-    liftEffect $ l $ "Currently having " <> show cu <> " users, " <> show ca <> " addresses, and " <> show cp <> " phone numbers"
-
-    let environment = ApplicationEnvironment { ws, pool }
-    liftEffect $ l "Starting application"
-    runApplication environment $ mainLoop false
-
-    liftEffect $ l "Stopping application"
-
-    liftEffect $ YG.end pool
-    void $ close ws 1000 "Goodbye!"
+  -- Print statistics:
+  liftEffect $ do
+    Console.log $ "_________________________________________"
+    Console.log $ " Users:"
+    Console.log $ "   - Hit  : " <> show users.cacheHit
+    Console.log $ "   - Miss : " <> show users.cacheMiss
+    Console.log $ "   - Total: " <> show (users.cacheHit + users.cacheMiss)
+    Console.log ""
+    Console.log $ " Addresses:"
+    Console.log $ "   - Hit  : " <> show addresses.cacheHit
+    Console.log $ "   - Miss : " <> show addresses.cacheMiss
+    Console.log $ "   - Total: " <> show (addresses.cacheHit + addresses.cacheMiss)
+    Console.log ""
+    Console.log $ " Phone Numbers:"
+    Console.log $ "   - Hit  : " <> show phones.cacheHit
+    Console.log $ "   - Miss : " <> show phones.cacheMiss
+    Console.log $ "   - Total: " <> show (phones.cacheHit + phones.cacheMiss)
+    Console.log $ "________________________________________"
+    Console.log $ " Total Hits  : " <> show (users.cacheHit + addresses.cacheHit + phones.cacheHit)
+    Console.log $ " Total Misses: " <> show (users.cacheMiss + addresses.cacheMiss + phones.cacheMiss)
+    Console.log $ "________________________________________"
+    Console.log $ " # Iterations: " <> show (users.cacheHit + users.cacheMiss + addresses.cacheHit + addresses.cacheMiss + phones.cacheHit + phones.cacheMiss)
 
   where
   createConnectionInfo :: YG.ConnectionInfo
   createConnectionInfo = YG.connectionInfoFromString "postgres://test:test@localhost:5432/test"
-
-  populateDatabase :: ∀ a. DB.Persistable a => DecodeJson a => Array a -> DB.DatabaseT Unit
-  populateDatabase d = traverse_ DB.persist d
-
-mainLoop :: Boolean -> ApplicationT Unit
-mainLoop stop = when (not stop) $ do
-  ws <- ask
-  pool <- lift ask
-
-  mainLoop' ws pool 0
-
-mainLoop' :: WebSocket -> YG.Pool -> Int -> ApplicationT Unit
-mainLoop' ws pool i = when (i < 150) $ do
-  request <- liftEffect $ do
-    r <- generateRandomRequest
-
-    let
-      letter = case r of
-        (GetUser _) -> "U"
-        (GetPhone _) -> "P"
-        (GetAddress _) -> "A"
-
-      func :: String -> String
-      func s = s <> letter
-    pure $ func $> r
-
-  cacheQuery <- (queryCache (Get $ getObjectId request) :: ApplicationT (Maybe Response))
-    >>= handleCacheResponse request
-
-  case cacheQuery of
-      Nothing -> void $ liftEffect $ l $ printIteration <> " Nothing to do"
-      Just x -> do
-        liftAff $ do
-            send ws $ toWsMessage x
-            msg <- recv ws
-            liftEffect $ l $ printIteration <> " Received: " <> show msg
-
-  liftAff $ delay (Milliseconds 250.0)
-  mainLoop' ws pool (i + 1)
-
-  where
-  printIteration :: String
-  printIteration = "[" <> show i <> "]"
-
-  queryCache :: ∀ a b. ToWsMessage a => FromWsMessage b => a -> ApplicationT (Maybe b)
-  queryCache msg = do
-    result <- liftAff $ do
-      send ws $ toWsMessage msg
-      recv ws
-
-    pure $ fromWsMessage result
-
-  queryDb :: ∀ a. DB.Findable a => DecodeJson a => Int -> ApplicationT (Maybe a)
-  queryDb objId = do
-    liftAff $ runReaderT (DB.find objId) pool
-
-  genObjId :: Int -> String -> String
-  genObjId obj letter = (padObjectId 7 obj) <> letter
-
-  storeUserInCache :: User -> Request
-  storeUserInCache (User { id, firstname, lastname, address, phonenumber }) = Create (genObjId id "U")
-    [ { key: "firstname", value: firstname }
-    , { key: "lastname", value: lastname }
-    , { key: "address", value: show address }
-    , { key: "phonenumber", value: show phonenumber }
-    ]
-
-  storeAddressInCache :: Address -> Request
-  storeAddressInCache (Address { id, street, zip, city }) = Create (genObjId id "A")
-    [ { key: "street", value: street }
-    , { key: "zip", value: zip }
-    , { key: "city", value: city }
-    ]
-
-  storePhoneInCache :: PhoneNumber -> Request
-  storePhoneInCache (PhoneNumber { id, number, prefix }) = Create (genObjId id "P")
-    [ { key: "number", value: number }
-    , { key: "prefix", value: prefix }
-    ]
-
-  queryUser :: GeneratedRequest -> ApplicationT (Maybe User)
-  queryUser = queryForObj
-
-  queryAddress :: GeneratedRequest -> ApplicationT (Maybe Address)
-  queryAddress = queryForObj
-
-  queryPhone :: GeneratedRequest -> ApplicationT (Maybe PhoneNumber)
-  queryPhone = queryForObj
-
-  queryForObj :: ∀ a. DB.Findable a => DecodeJson a => GeneratedRequest -> ApplicationT (Maybe a)
-  queryForObj req = do
-    let id = (getObjectId >>> unPadObjectId) req
-    case id of
-      Nothing -> pure Nothing
-      Just x -> queryDb x
-
-  handleCacheResponse :: GeneratedRequest -> Maybe Response -> ApplicationT (Maybe Request)
-  handleCacheResponse _ Nothing = do
-    liftEffect $ l "Invalid message received from cache"
-    pure Nothing
-
-  handleCacheResponse _ (Just (GetR _ _)) = do
-    liftEffect $ l "Object retrieved from cache"
-    pure Nothing
-
-  handleCacheResponse req (Just False) = do
-    liftEffect $ l "Object not in cache, retrieving from DB"
-    case req of
-      (GetUser _) -> do
-        dbObj <- queryUser req
-        case dbObj of
-          Nothing -> pure Nothing
-          Just x -> pure $ Just $ storeUserInCache x
-      (GetAddress _) -> do
-        dbObj <- queryAddress req
-        case dbObj of
-          Nothing -> pure Nothing
-          Just x -> pure $ Just $ storeAddressInCache x
-      (GetPhone _) -> do
-        dbObj <- queryPhone req
-        case dbObj of
-          Nothing -> pure Nothing
-          Just x -> pure $ Just $ storePhoneInCache x
-
-  handleCacheResponse _ (Just _) = do
-    liftEffect $ l "Invalid message received from cache, ignoring"
-    pure Nothing
 

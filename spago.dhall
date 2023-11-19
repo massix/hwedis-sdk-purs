@@ -10,7 +10,7 @@ When creating a new Spago project, you can use
 `spago init --no-comments` or `spago init -C`
 to generate this file without the comments in this block.
 -}
-{ name = "my-project"
+{ name = "hwedis-benchmark"
 , dependencies =
   [ "aff"
   , "aff-promise"
@@ -37,7 +37,9 @@ to generate this file without the comments in this block.
   , "spec"
   , "strings"
   , "stringutils"
+  , "tailrec"
   , "transformers"
+  , "tuples"
   , "unsafe-coerce"
   , "yoga-postgres"
   ]

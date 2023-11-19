@@ -2,6 +2,12 @@ docker := `which docker`
 spago := `which spago`
 
 [private]
+default: start
+
+clean:
+  rm -fr output
+
+[private]
 @dockerup:
   {{docker}} compose up -d
 
@@ -13,7 +19,10 @@ build:
   {{spago}} build
 
 start: dockerdown dockerup
+  @sleep 1
   {{spago}} run
+
+stop: dockerdown
 
 repl:
   {{spago}} repl
