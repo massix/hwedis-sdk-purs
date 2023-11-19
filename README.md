@@ -1,5 +1,6 @@
 ![Tests](https://github.com/massix/hwedis-sdk-purs/actions/workflows/purs-compile.yml/badge.svg)
 
-# Hwedis SDK for PureScript
+# Hwedis Benchmarking in PureScript
 
-TODO..
+This is just a simple PureScript project to test the pure performance of Hwedis.
+

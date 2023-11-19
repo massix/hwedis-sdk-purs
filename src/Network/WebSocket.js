@@ -1,11 +1,4 @@
 import WebSocket from 'ws';
-const messages = [];
-
-const wait = () => {
-  return new Promise(resolve => {
-    setTimeout(() => resolve(), 1000);
-  });
-};
 
 export const mkWebSocketImpl = address => id => () => {
 
@@ -15,8 +8,11 @@ export const mkWebSocketImpl = address => id => () => {
       resolve(ws);
       ws.pause();
     });
-    ws.once('error', () => {
-      reject('error');
+    ws.once('error', err => {
+      reject(err);
+    });
+    ws.on('ping', data => {
+      ws.pong(data);
     });
   });
 };
