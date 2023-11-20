@@ -18,16 +18,27 @@ import Effect.Aff.Class (liftAff)
 import Effect.Class (class MonadEffect, liftEffect)
 import Effect.Console as Console
 import Effect.Random (randomInt)
+import Misc.Utils (Radix(..), parseInt)
 import Monad.Bench (AppM, CacheStats, AppState, getCache, getDb, log, putCache, runAppM, updateCache, updateDb)
 import Network.WebSocket as WS
 import Node.Buffer (toString)
 import Node.Encoding (Encoding(..))
 import Node.FS.Sync (readFile)
+import Node.Process (argv)
 import Storage.Database as DB
 import Storage.Types (Address(..), PhoneNumber(..), User(..))
 import Yoga.Postgres as YG
 
-data FoundWhere a = Cache a | Db a | Nowhere
+data FoundWhere a
+  = Cache a
+  | Db a
+  | Nowhere
+
+instance Functor FoundWhere where
+  map :: ∀ a b. (a -> b) -> FoundWhere a -> FoundWhere b
+  map _ Nowhere = Nowhere
+  map f (Cache a) = Cache (f a)
+  map f (Db a) = Db (f a)
 
 getUserFromCacheOrDb :: Int -> AppM (FoundWhere User)
 getUserFromCacheOrDb id = do
@@ -154,57 +165,44 @@ program = do
         u <- getUserFromCacheOrDb id
         case u of
           Nowhere -> pure unit
-          Cache x -> do
-            put { users: putCacheHit users, addresses, phones }
-            log $ "Cache: " <> show x
+          Cache _ -> put { users: putCacheHit users, addresses, phones }
           Db x -> do
             put { users: putCacheMiss users, addresses, phones }
-            log $ "DB: " <> show x
             putCache ws x
       GetAddress id -> do
         a <- getAddressFromCacheOrDb id
         case a of
           Nowhere -> pure unit
-          Cache x -> do
-            put { users, addresses: putCacheHit addresses, phones }
-            log $ "Cache: " <> show x
+          Cache _ -> put { users, addresses: putCacheHit addresses, phones }
           Db x -> do
             put { users, addresses: putCacheMiss addresses, phones }
-            log $ "DB: " <> show x
             putCache ws x
       GetPhone id -> do
         p <- getPhoneFromCacheOrDb id
         case p of
           Nowhere -> pure unit
-          Cache x -> do
-            put { users, addresses, phones: putCacheHit phones }
-            log $ "Cache: " <> show x
+          Cache _ -> put { users, addresses, phones: putCacheHit phones }
           Db x -> do
             put { users, addresses, phones: putCacheMiss phones }
-            log $ "DB: " <> show x
             putCache ws x
       UpdateUser id -> do
-        log $ "Updating user with id: " <> show id
         u <- getUserFromCacheOrDb id
         case u of
-          Nowhere -> log "Could not find user to update"
+          Nowhere -> pure unit
           Cache (User { id: uid, firstname, lastname, address, phonenumber }) -> do
             let newUser = User { id: uid, firstname: firstname <> " modified", lastname: lastname <> " modified", address, phonenumber }
-            log "User was in cache, updating"
             updateDb pool newUser
             updateCache ws newUser
             put { users: putCacheHit users, addresses, phones }
           Db (User { id: uid, firstname, lastname, address, phonenumber }) -> do
             let newUser = User { id: uid, firstname: firstname <> " modified", lastname: lastname <> " modified", address, phonenumber }
-            log "User was in DB, creating new entry"
             updateDb pool newUser
             putCache ws newUser
             put { users: putCacheMiss users, addresses, phones }
       UpdateAddress id -> do
-        log $ "Updating address with id: " <> show id
         a <- getAddressFromCacheOrDb id
         case a of
-          Nowhere -> log "Could not find address to update"
+          Nowhere -> pure unit
           Cache (Address { id: aid, street, city, zip, country }) -> do
             let newAddress = Address { id: aid, street: street <> " modified", city: city <> " modified", zip, country }
             updateDb pool newAddress
@@ -216,10 +214,9 @@ program = do
             putCache ws newAddress
             put { users, addresses: putCacheMiss addresses, phones }
       UpdatePhone id -> do
-        log $ "Updating phone with id: " <> show id
         p <- getPhoneFromCacheOrDb id
         case p of
-          Nowhere -> log "Could not find phone to update"
+          Nowhere -> pure unit
           Cache (PhoneNumber { id: pid, number, prefix }) -> do
             let newPhone = PhoneNumber { id: pid, number: number <> " modified", prefix }
             updateDb pool newPhone
@@ -244,9 +241,17 @@ receiver = forever $ do
 newtype Iterations = Iterations Int
 newtype ClientId = ClientId String
 
+-- first argument is "node", second is the script path, third is the first one we're interested in
+parseIterations :: Array String -> Int
+parseIterations [ _, _, xs ] =
+  case parseInt (Radix 10) xs of
+    Nothing -> 5
+    Just val -> val
+parseIterations _ = 5
+
 main :: Effect Unit
 main = launchAff_ $ do
-  let iterations = 500
+  it <- liftEffect $ argv >>= parseIterations >>> pure
 
   -- Read data files
   usersFromFile <- readUser "./data/users.json"
@@ -268,8 +273,8 @@ main = launchAff_ $ do
 
   let
     benchFunction c = do
-      delay (Milliseconds 250.0)
-      forkAff $ bencher (Iterations iterations) (ClientId $ "Client" <> show c)
+      delay (Milliseconds 500.0)
+      forkAff $ bencher (Iterations it) (ClientId $ "Client" <> show c)
 
   arrFiber <- traverse benchFunction (1 .. 5)
   arrResults <- traverse joinFiber arrFiber
