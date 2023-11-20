@@ -1,22 +1,22 @@
 {
   inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
-  inputs.easy-purescript.url = "github:justinwoo/easy-purescript-nix";
+  inputs.purescript-overlay.url = "github:thomashoneyman/purescript-overlay";
 
-  outputs = { nixpkgs, easy-purescript, ... }:
+  outputs = { nixpkgs, purescript-overlay, ... }:
     let
       system = "x86_64-linux";
+      overlays = [ purescript-overlay.overlays.default ];
       pkgs = import nixpkgs {
-        inherit system;
+        inherit system overlays;
         config.allowBroken = true;
       };
-      easy-ps = easy-purescript.packages.${system};
     in
     {
       devShells."${system}".default = pkgs.mkShell {
-        packages = with easy-ps; [
-          purescript
-          spago
-          purs-tidy
+        packages = with pkgs; [
+          spago-unstable
+          purs-tidy-bin.purs-tidy-0_10_0
+          purs-backend-es
           purs
 
           pkgs.nodejs-18_x
