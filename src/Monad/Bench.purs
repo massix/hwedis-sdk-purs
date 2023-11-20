@@ -6,6 +6,7 @@ import Control.Monad.Reader (class MonadAsk, ReaderT, runReaderT)
 import Control.Monad.Rec.Class (class MonadRec)
 import Control.Monad.State (class MonadState, StateT, runStateT)
 import Data.Array (filter, head)
+import Data.Configuration as Config
 import Data.Date (month, year)
 import Data.DateTime (date, day, hour, millisecond, minute, second, time)
 import Data.Enum (class BoundedEnum, fromEnum)
@@ -45,14 +46,8 @@ type AppState =
 type AppEnvironment =
   { ws :: WS.WebSocket
   , pool :: YG.Pool
-  , iterations :: Int
+  , configuration :: Config.Configuration
   }
-
-minSleep :: Int
-minSleep = 15
-
-maxSleep :: Int
-maxSleep = 125
 
 -- I could use an RWS but I definetely do not need the W
 newtype AppM a = AppM (StateT AppState (ReaderT AppEnvironment Aff) a)
@@ -70,11 +65,16 @@ class (MonadAff m) <= MonadCache s m where
 class (MonadEffect m) <= MonadLogger m where
   log :: String -> m Unit
 
--- This Monad can interact with objects in a PostgreSQL Database
+type MinSleep = Int
+type MaxSleep = Int
+
+-- | This Monad can interact with objects in a PostgreSQL Database
+-- | since this is a simulation, the delay for reaching the DB is
+-- | configurable
 class (MonadAff m, Findable s, Persistable s, Updatable s) <= MonadDatabase s m where
-  getDb :: YG.Pool -> Int -> m (Maybe s)
-  putDb :: YG.Pool -> s -> m Unit
-  updateDb :: YG.Pool -> s -> m Unit
+  getDb :: MinSleep -> MaxSleep -> YG.Pool -> Int -> m (Maybe s)
+  putDb :: MinSleep -> MaxSleep -> YG.Pool -> s -> m Unit
+  updateDb :: MinSleep -> MaxSleep -> YG.Pool -> s -> m Unit
 
 derive newtype instance Functor AppM
 derive newtype instance Applicative AppM
@@ -154,17 +154,17 @@ getFromCache ws id pl = do
 
 -- Simulate a small delay for accessing the DB over the network
 instance MonadDatabase PhoneNumber AppM where
-  getDb pool id = liftAff $ do
+  getDb minSleep maxSleep pool id = liftAff $ do
     ri <- liftEffect $ randomInt minSleep maxSleep
     delay (Milliseconds $ toNumber ri)
     runReaderT (DB.find id) pool
 
-  putDb pool a = liftAff $ do
+  putDb minSleep maxSleep pool a = liftAff $ do
     ri <- liftEffect $ randomInt minSleep maxSleep
     delay (Milliseconds $ toNumber ri)
     void $ runReaderT (DB.persist a) pool
 
-  updateDb pool a = liftAff $ do
+  updateDb minSleep maxSleep pool a = liftAff $ do
     ri <- liftEffect $ randomInt minSleep maxSleep
     delay (Milliseconds $ toNumber ri)
     void $ runReaderT (DB.update a) pool
@@ -194,15 +194,15 @@ instance MonadCache PhoneNumber AppM where
     void $ WS.recv ws
 
 instance MonadDatabase Address AppM where
-  getDb pool id = liftAff $ do
+  getDb minSleep maxSleep pool id = liftAff $ do
     ri <- liftEffect $ randomInt minSleep maxSleep
     delay (Milliseconds $ toNumber ri)
     runReaderT (DB.find id) pool
-  putDb pool a = liftAff $ do
+  putDb minSleep maxSleep pool a = liftAff $ do
     ri <- liftEffect $ randomInt minSleep maxSleep
     delay (Milliseconds $ toNumber ri)
     void $ runReaderT (DB.persist a) pool
-  updateDb pool a = liftAff $ do
+  updateDb minSleep maxSleep pool a = liftAff $ do
     ri <- liftEffect $ randomInt minSleep maxSleep
     delay (Milliseconds $ toNumber ri)
     void $ runReaderT (DB.update a) pool
@@ -236,15 +236,15 @@ instance MonadCache Address AppM where
     void $ WS.recv ws
 
 instance MonadDatabase User AppM where
-  getDb pool id = liftAff $ do
+  getDb minSleep maxSleep pool id = liftAff $ do
     ri <- liftEffect $ randomInt minSleep maxSleep
     delay (Milliseconds $ toNumber ri)
     runReaderT (DB.find id) pool
-  putDb pool a = liftAff $ do
+  putDb minSleep maxSleep pool a = liftAff $ do
     ri <- liftEffect $ randomInt minSleep maxSleep
     delay (Milliseconds $ toNumber ri)
     void $ runReaderT (DB.persist a) pool
-  updateDb pool a = liftAff $ do
+  updateDb minSleep maxSleep pool a = liftAff $ do
     ri <- liftEffect $ randomInt minSleep maxSleep
     delay (Milliseconds $ toNumber ri)
     void $ runReaderT (DB.update a) pool

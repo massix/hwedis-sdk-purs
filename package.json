@@ -4,6 +4,7 @@
   "dependencies": {
     "pg": "^8.11.3",
     "testcontainers": "^10.2.2",
+    "toml": "^3.0.0",
     "ws": "^8.14.2"
   }
 }

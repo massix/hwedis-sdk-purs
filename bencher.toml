@@ -1,0 +1,18 @@
+workers = 1
+iterationsPerWorker = 100
+
+[db]
+host = "localhost"
+port = 5432
+user = "test"
+password = "test"
+database = "test"
+
+[db.simulation]
+minDelay = 15
+maxDelay = 125
+
+[hwedis]
+host = "127.0.0.1"
+port = 9092
+clientPrefix = "bencher-"
