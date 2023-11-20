@@ -91,4 +91,4 @@ parse fp = do
   jsonDecode = decodeJson >>> lmap printJsonDecodeError
 
   handleNoEnt :: Error -> Either TomlParseError String
-  handleNoEnt = Left <<< message 
+  handleNoEnt = Left <<< message

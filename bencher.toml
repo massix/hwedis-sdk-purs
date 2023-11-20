@@ -1,5 +1,5 @@
-workers = 1
-iterationsPerWorker = 100
+workers = 10
+iterationsPerWorker = 1000
 
 [db]
 host = "localhost"

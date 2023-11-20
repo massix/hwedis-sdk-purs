@@ -14,7 +14,7 @@ import Data.Maybe (Maybe(..))
 import Data.Traversable (traverse)
 import Data.Tuple (Tuple(..))
 import Effect (Effect)
-import Effect.Aff (Aff, Milliseconds(..), delay, error, forkAff, joinFiber, killFiber, launchAff_)
+import Effect.Aff (Aff, error, forkAff, joinFiber, killFiber, launchAff_)
 import Effect.Aff.Class (liftAff)
 import Effect.Class (class MonadEffect, liftEffect)
 import Effect.Console as Console
@@ -267,13 +267,10 @@ main = launchAff_ $ do
 
       liftEffect $ YG.end pool
 
-      let
-        benchFunction ix = do
-          delay (Milliseconds 500.0)
-          forkAff $ bencher config ix 
-
-      arrFiber <- traverse benchFunction (1 .. config.workers)
+      arrFiber <- traverse (bencher config >>> forkAff) (1 .. config.workers)
       arrResults <- traverse joinFiber arrFiber
+
+      liftEffect $ Console.log "Benchmarking over, collecting and aggregating results..."
 
       -- Print statistics:
       liftEffect $ printStats (aggregateStats $ map (\(Tuple _ stats) -> stats) arrResults)
