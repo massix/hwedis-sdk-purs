@@ -7,22 +7,17 @@ import Control.Monad.Rec.Class (class MonadRec)
 import Control.Monad.State (class MonadState, StateT, runStateT)
 import Data.Array (filter, head)
 import Data.Configuration as Config
-import Data.Date (month, year)
-import Data.DateTime (date, day, hour, millisecond, minute, second, time)
-import Data.Enum (class BoundedEnum, fromEnum)
 import Data.Int (toNumber)
 import Data.Maybe (Maybe(..))
 import Data.Messages as Cache
 import Data.String (Pattern(..), Replacement(..), replaceAll)
 import Data.String.Utils (padStart)
 import Data.Tuple (Tuple)
-import Effect (Effect)
 import Effect.Aff (Aff, Milliseconds(..), delay)
 import Effect.Aff.Class (class MonadAff, liftAff)
 import Effect.Class (class MonadEffect, liftEffect)
-import Effect.Console as Console
-import Effect.Now (nowDateTime)
 import Effect.Random (randomInt)
+import Misc.Logger (class MonadLogger, Severity(..))
 import Misc.Utils (Radix(..), parseInt)
 import Network.WebSocket as WS
 import Storage.Database (class Findable, class Persistable, class Updatable)
@@ -46,6 +41,7 @@ type AppState =
 type AppEnvironment =
   { ws :: WS.WebSocket
   , pool :: YG.Pool
+  , clientId :: String
   , configuration :: Config.Configuration
   }
 
@@ -60,10 +56,6 @@ class (MonadAff m) <= MonadCache s m where
   getCache :: WS.WebSocket -> Int -> m (Maybe s)
   putCache :: WS.WebSocket -> s -> m Unit
   updateCache :: WS.WebSocket -> s -> m Unit
-
--- Commodity logger
-class (MonadEffect m) <= MonadLogger m where
-  log :: String -> m Unit
 
 type MinSleep = Int
 type MaxSleep = Int
@@ -278,21 +270,6 @@ instance MonadCache User AppM where
     void $ WS.recv ws
 
 instance MonadLogger AppM where
-  log x = liftEffect $ prependDateTime x >>= Console.log
-
-    where
-    prependDateTime :: String -> Effect String
-    prependDateTime s = do
-      n <- nowDateTime
-      let
-        nd = date n
-        nt = time n
-
-        ge :: ∀ a. BoundedEnum a => PadSize -> a -> String
-        ge ps = replaceAll (Pattern " ") (Replacement "0") <<< padStart ps <<< show <<< fromEnum
-
-        showDate = ge 4 (year nd) <> "-" <> ge 2 (month nd) <> "-" <> ge 2 (day nd)
-        showTime = ge 2 (hour nt) <> ":" <> ge 2 (minute nt) <> ":" <> ge 2 (second nt) <> "." <> ge 4 (millisecond nt)
-
-      pure ("[" <> showDate <> " " <> showTime <> "] " <> s)
+  getContext = pure "Bench"
+  getLogLevel = pure Info
 

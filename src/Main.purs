@@ -19,7 +19,8 @@ import Effect.Aff.Class (liftAff)
 import Effect.Class (class MonadEffect, liftEffect)
 import Effect.Console as Console
 import Effect.Random (randomInt)
-import Monad.Bench (AppM, CacheStats, AppState, getCache, getDb, log, putCache, runAppM, updateCache, updateDb)
+import Misc.Logger (class MonadLogger, Severity(..), log)
+import Monad.Bench (AppM, CacheStats, AppState, getCache, getDb, putCache, runAppM, updateCache, updateDb)
 import Network.WebSocket as WS
 import Node.Buffer (toString)
 import Node.Encoding (Encoding(..))
@@ -46,14 +47,14 @@ getUserFromCacheOrDb id = do
 
   case user of
     Nothing -> do
-      log "Could not find user in cache, reverting to DB"
+      log Debug "Could not find user in cache, reverting to DB"
       fromDb <- getDb minDelay maxDelay pool id
       case fromDb of
         Nothing -> pure Nowhere
         Just x -> pure $ Db x
 
     Just x -> do
-      log "User found in cache"
+      log Debug "User found in cache"
       pure $ Cache x
 
 getAddressFromCacheOrDb :: Int -> AppM (FoundWhere Address)
@@ -63,13 +64,13 @@ getAddressFromCacheOrDb id = do
 
   case address of
     Nothing -> do
-      log "Could not find address in cache, reverting to DB"
+      log Debug "Could not find address in cache, reverting to DB"
       fromDb <- getDb minDelay maxDelay pool id
       case fromDb of
         Nothing -> pure Nowhere
         Just x -> pure $ Db x
     Just x -> do
-      log "Address found in cache"
+      log Debug "Address found in cache"
       pure $ Cache x
 
 getPhoneFromCacheOrDb :: Int -> AppM (FoundWhere PhoneNumber)
@@ -79,13 +80,13 @@ getPhoneFromCacheOrDb id = do
 
   case phone of
     Nothing -> do
-      log "Could not find phone in cache, reverting to DB"
+      log Debug "Could not find phone in cache, reverting to DB"
       fromDb <- getDb minDelay maxDelay pool id
       case fromDb of
         Nothing -> pure Nowhere
         Just x -> pure $ Db x
     Just x -> do
-      log "Phone found in cache"
+      log Debug "Phone found in cache"
       pure $ Cache x
 
 data FakeRequest
@@ -134,13 +135,16 @@ readDataFile path = do
 program :: AppM Unit
 program = do
   s <- get
-  e@{ configuration: { iterationsPerWorker } } <- ask
+  e@{ clientId, configuration: { iterationsPerWorker } } <- ask
+
+  log Info $ "Starting worker " <> clientId
 
   -- Start the receiver in a separate Aff context
   fiber <- liftAff $ forkAff (runAppM receiver s e)
 
   runLoop iterationsPerWorker 0
 
+  log Info $ "Stopping worker " <> clientId
   -- Kill the receiver
   liftAff $ killFiber (error "I HATE YOU!") fiber
 
@@ -153,10 +157,11 @@ program = do
 
   runLoop :: Int -> Int -> AppM Unit
   runLoop limit count = when (count < limit) $ do
-    { ws, pool, configuration: { db: { simulation: { minDelay, maxDelay } } } } <- ask
+    { clientId, ws, pool, configuration: { db: { simulation: { minDelay, maxDelay } } } } <- ask
     { users, addresses, phones } <- get
 
-    log $ "Iteration #" <> show count
+    log Debug $ clientId <> " Iteration #" <> show count
+    when (count `mod` 50 == 0) $ log Info $ clientId <> " Iteration #" <> show count
 
     randomRequest <- generateRandomRequest
     case randomRequest of
@@ -235,18 +240,19 @@ receiver :: AppM Unit
 receiver = forever $ do
   { ws } <- ask
   msg <- liftAff $ WS.recv ws
-  log $ "Received: " <> show msg
+  log Debug $ "Received: " <> show msg
 
 newtype Iterations = Iterations Int
 newtype ClientId = ClientId String
 
 main :: Effect Unit
 main = launchAff_ $ do
+  log Info "Loading configuration"
   conf <- liftEffect $ Config.parse "bencher.toml"
 
   case conf of
     Left err -> do
-      liftEffect $ Console.log $ "An error occured while loading the configuration: " <> show err
+      log Error $ "An error occured while loading the configuration: " <> show err
       pure unit
     Right config -> do
       -- Read data files
@@ -256,7 +262,7 @@ main = launchAff_ $ do
 
       pool <- liftEffect $ YG.mkPool $ createConnectionInfo config
 
-      liftEffect $ Console.log "Populating database"
+      log Info "Populating database"
       flip runReaderT pool $ do
         DB.dropTables
         DB.createTables
@@ -270,10 +276,10 @@ main = launchAff_ $ do
       arrFiber <- traverse (bencher config >>> forkAff) (1 .. config.workers)
       arrResults <- traverse joinFiber arrFiber
 
-      liftEffect $ Console.log "Benchmarking over, collecting and aggregating results..."
+      log Info "Benchmarking over, collecting and aggregating results..."
 
       -- Print statistics:
-      liftEffect $ printStats (aggregateStats $ map (\(Tuple _ stats) -> stats) arrResults)
+      printStats (aggregateStats $ map (\(Tuple _ stats) -> stats) arrResults)
 
   where
   createConnectionInfo :: Config.Configuration -> YG.ConnectionInfo
@@ -284,11 +290,12 @@ main = launchAff_ $ do
   bencher config@{ hwedis: { clientPrefix } } ix = do
     let initStatus = { cacheHit: 0, cacheMiss: 0 }
     let st = { users: initStatus, addresses: initStatus, phones: initStatus }
+    let clientId = clientPrefix <> show ix
 
-    newWs <- WS.mkWebSocket ("ws://" <> config.hwedis.host <> ":" <> show config.hwedis.port) (clientPrefix <> show ix)
+    newWs <- WS.mkWebSocket ("ws://" <> config.hwedis.host <> ":" <> show config.hwedis.port) clientId
     newPool <- liftEffect $ YG.mkPool $ createConnectionInfo config
 
-    res <- runAppM program st { ws: newWs, pool: newPool, configuration: config }
+    res <- runAppM program st { clientId, ws: newWs, pool: newPool, configuration: config }
 
     void $ WS.close newWs 1000 "Goodbye!"
     liftEffect $ YG.end newPool
@@ -308,26 +315,26 @@ main = launchAff_ $ do
     in
       foldr sumFull { users: statsZero, addresses: statsZero, phones: statsZero } arr
 
-  printStats :: AppState -> Effect Unit
+  printStats :: ∀ m. (MonadLogger m) => AppState -> m Unit
   printStats { users, addresses, phones } = do
-    Console.log $ "_________________________________________"
-    Console.log $ " Users:"
-    Console.log $ "   - Hit  : " <> show users.cacheHit
-    Console.log $ "   - Miss : " <> show users.cacheMiss
-    Console.log $ "   - Total: " <> show (users.cacheHit + users.cacheMiss)
-    Console.log ""
-    Console.log $ " Addresses:"
-    Console.log $ "   - Hit  : " <> show addresses.cacheHit
-    Console.log $ "   - Miss : " <> show addresses.cacheMiss
-    Console.log $ "   - Total: " <> show (addresses.cacheHit + addresses.cacheMiss)
-    Console.log ""
-    Console.log $ " Phone Numbers:"
-    Console.log $ "   - Hit  : " <> show phones.cacheHit
-    Console.log $ "   - Miss : " <> show phones.cacheMiss
-    Console.log $ "   - Total: " <> show (phones.cacheHit + phones.cacheMiss)
-    Console.log $ "________________________________________"
-    Console.log $ " Total Hits  : " <> show (users.cacheHit + addresses.cacheHit + phones.cacheHit)
-    Console.log $ " Total Misses: " <> show (users.cacheMiss + addresses.cacheMiss + phones.cacheMiss)
-    Console.log $ "________________________________________"
-    Console.log $ " # Iterations: " <> show (users.cacheHit + users.cacheMiss + addresses.cacheHit + addresses.cacheMiss + phones.cacheHit + phones.cacheMiss)
+    log Info $ "_________________________________________"
+    log Info $ " Users:"
+    log Info $ "   - Hit  : " <> show users.cacheHit
+    log Info $ "   - Miss : " <> show users.cacheMiss
+    log Info $ "   - Total: " <> show (users.cacheHit + users.cacheMiss)
+    log Info $ ""
+    log Info $ " Addresses:"
+    log Info $ "   - Hit  : " <> show addresses.cacheHit
+    log Info $ "   - Miss : " <> show addresses.cacheMiss
+    log Info $ "   - Total: " <> show (addresses.cacheHit + addresses.cacheMiss)
+    log Info $ ""
+    log Info $ " Phone Numbers:"
+    log Info $ "   - Hit  : " <> show phones.cacheHit
+    log Info $ "   - Miss : " <> show phones.cacheMiss
+    log Info $ "   - Total: " <> show (phones.cacheHit + phones.cacheMiss)
+    log Info $ "________________________________________"
+    log Info $ " Total Hits  : " <> show (users.cacheHit + addresses.cacheHit + phones.cacheHit)
+    log Info $ " Total Misses: " <> show (users.cacheMiss + addresses.cacheMiss + phones.cacheMiss)
+    log Info $ "________________________________________"
+    log Info $ " # Iterations: " <> show (users.cacheHit + users.cacheMiss + addresses.cacheHit + addresses.cacheMiss + phones.cacheHit + phones.cacheMiss)
 
