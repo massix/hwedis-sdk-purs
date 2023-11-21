@@ -2,6 +2,7 @@ module Main where
 
 import Prelude
 
+import Control.Monad.Error.Class (catchError)
 import Control.Monad.Reader (ask, runReaderT)
 import Control.Monad.Rec.Class (forever)
 import Control.Monad.State (get, put)
@@ -14,7 +15,7 @@ import Data.Maybe (Maybe(..))
 import Data.Traversable (traverse)
 import Data.Tuple (Tuple(..))
 import Effect (Effect)
-import Effect.Aff (Aff, error, forkAff, joinFiber, killFiber, launchAff_)
+import Effect.Aff (Aff, error, forkAff, joinFiber, killFiber, launchAff_, message)
 import Effect.Aff.Class (liftAff)
 import Effect.Class (class MonadEffect, liftEffect)
 import Effect.Console as Console
@@ -145,8 +146,12 @@ program = do
   runLoop iterationsPerWorker 0
 
   log Info $ "Stopping worker " <> clientId
+
   -- Kill the receiver
-  liftAff $ killFiber (error "I HATE YOU!") fiber
+  liftAff $ killFiber (error "Ignore me, I am not really an error!") fiber
+
+  log Info $ "Waiting for receiver to stop: " <> clientId
+  liftAff $ catchError (void $ joinFiber fiber) (\err -> log Warning $ "Got error from fiber: " <> message err)
 
   where
   putCacheHit :: CacheStats -> CacheStats
