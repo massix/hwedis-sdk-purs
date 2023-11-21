@@ -27,6 +27,14 @@ import Yoga.Postgres as YG
 
 type PadSize = Int
 
+data Call
+  = CacheCall Number Number
+  | DatabaseCall Number Number
+
+isCacheCall :: Call -> Boolean
+isCacheCall (CacheCall _ _) = true
+isCacheCall _ = false
+
 type CacheStats =
   { cacheHit :: Int
   , cacheMiss :: Int
@@ -36,6 +44,7 @@ type AppState =
   { users :: CacheStats
   , addresses :: CacheStats
   , phones :: CacheStats
+  , calls :: Array Call
   }
 
 type AppEnvironment =

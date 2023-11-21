@@ -7,11 +7,15 @@ import Control.Monad.Reader (ask, runReaderT)
 import Control.Monad.Rec.Class (forever)
 import Control.Monad.State (get, put)
 import Data.Argonaut (class DecodeJson, decodeJson, parseJson)
-import Data.Array (foldr, (..))
+import Data.Array (filter, foldr, length, (..))
 import Data.Configuration as Config
+import Data.DateTime.Instant (Instant, unInstant)
 import Data.Either (Either(..))
-import Data.Foldable (traverse_)
+import Data.Foldable (sum, traverse_)
+import Data.Int (toNumber)
 import Data.Maybe (Maybe(..))
+import Data.Number.Format (fixed, toStringWith)
+import Data.Time.Duration (Milliseconds(..))
 import Data.Traversable (traverse)
 import Data.Tuple (Tuple(..))
 import Effect (Effect)
@@ -19,9 +23,10 @@ import Effect.Aff (Aff, error, forkAff, joinFiber, killFiber, launchAff_, messag
 import Effect.Aff.Class (liftAff)
 import Effect.Class (class MonadEffect, liftEffect)
 import Effect.Console as Console
+import Effect.Now (now)
 import Effect.Random (randomInt)
 import Misc.Logger (class MonadLogger, Severity(..), log)
-import Monad.Bench (AppM, CacheStats, AppState, getCache, getDb, putCache, runAppM, updateCache, updateDb)
+import Monad.Bench (AppM, AppState, CacheStats, Call(..), getCache, getDb, isCacheCall, putCache, runAppM, updateCache, updateDb)
 import Network.WebSocket as WS
 import Node.Buffer (toString)
 import Node.Encoding (Encoding(..))
@@ -149,8 +154,6 @@ program = do
 
   -- Kill the receiver
   liftAff $ killFiber (error "Ignore me, I am not really an error!") fiber
-
-  log Info $ "Waiting for receiver to stop: " <> clientId
   liftAff $ catchError (void $ joinFiber fiber) (\err -> log Warning $ "Got error from fiber: " <> message err)
 
   where
@@ -163,81 +166,92 @@ program = do
   runLoop :: Int -> Int -> AppM Unit
   runLoop limit count = when (count < limit) $ do
     { clientId, ws, pool, configuration: { db: { simulation: { minDelay, maxDelay } } } } <- ask
-    { users, addresses, phones } <- get
+    currentState@{ users, addresses, phones, calls } <- get
 
     log Debug $ clientId <> " Iteration #" <> show count
     when (count `mod` 50 == 0) $ log Info $ clientId <> " Iteration #" <> show count
 
     randomRequest <- generateRandomRequest
+
+    requestStart <- liftEffect $ now >>= unInstant >>> extractInstant >>> pure
     case randomRequest of
       GetUser id -> do
         u <- getUserFromCacheOrDb id
+        end <- liftEffect $ now >>= unInstant >>> extractInstant >>> pure
         case u of
-          Nowhere -> pure unit
-          Cache _ -> put { users: putCacheHit users, addresses, phones }
+          Nowhere -> log Error $ "Could not find user with id: " <> show id
+          Cache _ -> put currentState { users = putCacheHit users, calls = calls <> [(CacheCall requestStart end)] }
           Db x -> do
-            put { users: putCacheMiss users, addresses, phones }
             putCache ws x
+            put currentState { users = putCacheMiss users, calls = calls <> [(DatabaseCall requestStart end)] }
       GetAddress id -> do
         a <- getAddressFromCacheOrDb id
+        end <- liftEffect $ now >>= unInstant >>> extractInstant >>> pure
         case a of
-          Nowhere -> pure unit
-          Cache _ -> put { users, addresses: putCacheHit addresses, phones }
+          Nowhere -> log Error $ "Could not find address with id: " <> show id
+          Cache _ -> put currentState { addresses = putCacheHit addresses, calls = calls <> [(CacheCall requestStart end)] }
           Db x -> do
-            put { users, addresses: putCacheMiss addresses, phones }
             putCache ws x
+            put currentState { addresses = putCacheMiss addresses, calls = calls <> [(DatabaseCall requestStart end)] }
       GetPhone id -> do
         p <- getPhoneFromCacheOrDb id
+        end <- liftEffect $ now >>= unInstant >>> extractInstant >>> pure
         case p of
-          Nowhere -> pure unit
-          Cache _ -> put { users, addresses, phones: putCacheHit phones }
+          Nowhere -> log Error $ "Could not find phone with id: " <> show id
+          Cache _ -> put currentState { phones = putCacheHit phones, calls = calls <> [(CacheCall requestStart end)] }
           Db x -> do
-            put { users, addresses, phones: putCacheMiss phones }
             putCache ws x
+            put currentState { phones = putCacheMiss phones, calls = calls <> [(DatabaseCall requestStart end)] }
       UpdateUser id -> do
         u <- getUserFromCacheOrDb id
+        end <- liftEffect $ now >>= unInstant >>> extractInstant >>> pure
         case u of
-          Nowhere -> pure unit
+          Nowhere -> log Error $ "Could not find user with id: " <> show id
           Cache (User { id: uid, firstname, lastname, address, phonenumber }) -> do
             let newUser = User { id: uid, firstname: firstname <> " modified", lastname: lastname <> " modified", address, phonenumber }
             updateDb minDelay maxDelay pool newUser
             updateCache ws newUser
-            put { users: putCacheHit users, addresses, phones }
+            put currentState { users = putCacheHit users, calls = calls <> [(CacheCall requestStart end)] }
           Db (User { id: uid, firstname, lastname, address, phonenumber }) -> do
             let newUser = User { id: uid, firstname: firstname <> " modified", lastname: lastname <> " modified", address, phonenumber }
             updateDb minDelay maxDelay pool newUser
             putCache ws newUser
-            put { users: putCacheMiss users, addresses, phones }
+            put currentState { users = putCacheMiss users, calls = calls <> [(DatabaseCall requestStart end)] }
       UpdateAddress id -> do
         a <- getAddressFromCacheOrDb id
+        end <- liftEffect $ now >>= unInstant >>> extractInstant >>> pure
         case a of
-          Nowhere -> pure unit
+          Nowhere -> log Error $ "Could not find address with id: " <> show id
           Cache (Address { id: aid, street, city, zip, country }) -> do
             let newAddress = Address { id: aid, street: street <> " modified", city: city <> " modified", zip, country }
             updateDb minDelay maxDelay pool newAddress
             updateCache ws newAddress
-            put { users, addresses: putCacheHit addresses, phones }
+            put currentState { addresses = putCacheHit addresses, calls = calls <> [(CacheCall requestStart end)] }
           Db (Address { id: aid, street, city, zip, country }) -> do
             let newAddress = Address { id: aid, street: street <> " modified", city: city <> " modified", zip, country }
             updateDb minDelay maxDelay pool newAddress
             putCache ws newAddress
-            put { users, addresses: putCacheMiss addresses, phones }
+            put currentState { addresses = putCacheMiss addresses, calls = calls <> [(DatabaseCall requestStart end)] }
       UpdatePhone id -> do
         p <- getPhoneFromCacheOrDb id
+        end <- liftEffect $ now >>= unInstant >>> extractInstant >>> pure
         case p of
-          Nowhere -> pure unit
+          Nowhere -> log Error $ "Could  not find phone with id: " <> show id
           Cache (PhoneNumber { id: pid, number, prefix }) -> do
             let newPhone = PhoneNumber { id: pid, number: number <> " modified", prefix }
             updateDb minDelay maxDelay pool newPhone
             updateCache ws newPhone
-            put { users, addresses, phones: putCacheHit phones }
+            put currentState { phones = putCacheHit phones, calls = calls <> [(CacheCall requestStart end)] }
           Db (PhoneNumber { id: pid, number, prefix }) -> do
             let newPhone = PhoneNumber { id: pid, number: number <> " modified", prefix }
             updateDb minDelay maxDelay pool newPhone
             putCache ws newPhone
-            put { users, addresses, phones: putCacheMiss phones }
+            put currentState { phones = putCacheMiss phones, calls = calls <> [(DatabaseCall requestStart end)] }
 
     runLoop limit (count + 1)
+
+  extractInstant :: Milliseconds -> Number
+  extractInstant (Milliseconds x) = x
 
 -- | Receiver: this function runs in an Aff context, always listening for messages coming from
 -- | the websocket and modifying the state in consequence. This fiber will never end.
@@ -278,13 +292,28 @@ main = launchAff_ $ do
 
       liftEffect $ YG.end pool
 
+      log Info "Launching simulation, starting timers"
+
+      start <- liftEffect now
       arrFiber <- traverse (bencher config >>> forkAff) (1 .. config.workers)
       arrResults <- traverse joinFiber arrFiber
+      end <- liftEffect now
+
+      let
+        extract :: Milliseconds -> Number
+        extract (Milliseconds x) = x
+        toMilliseconds :: Instant -> Number
+        toMilliseconds = extract <<< unInstant
+
+        diff = toMilliseconds end - toMilliseconds start
+
 
       log Info "Benchmarking over, collecting and aggregating results..."
+      let aggregated = aggregateStats $ map (\(Tuple _ stats) -> stats) arrResults
 
       -- Print statistics:
-      printStats (aggregateStats $ map (\(Tuple _ stats) -> stats) arrResults)
+      printStats aggregated
+      log Info $ "Simulation lasted for: " <> toStringWith (fixed 2) (diff / 1000.0) <> " seconds"
 
   where
   createConnectionInfo :: Config.Configuration -> YG.ConnectionInfo
@@ -294,7 +323,7 @@ main = launchAff_ $ do
   bencher :: Config.Configuration -> Int -> Aff (Tuple Unit AppState)
   bencher config@{ hwedis: { clientPrefix } } ix = do
     let initStatus = { cacheHit: 0, cacheMiss: 0 }
-    let st = { users: initStatus, addresses: initStatus, phones: initStatus }
+    let st = { users: initStatus, addresses: initStatus, phones: initStatus, calls: [] }
     let clientId = clientPrefix <> show ix
 
     newWs <- WS.mkWebSocket ("ws://" <> config.hwedis.host <> ":" <> show config.hwedis.port) clientId
@@ -313,15 +342,30 @@ main = launchAff_ $ do
       sumStats { cacheHit: aCh, cacheMiss: aCm } { cacheHit: bCh, cacheMiss: bCm } = { cacheHit: aCh + bCh, cacheMiss: aCm + bCm }
 
       sumFull :: AppState -> AppState -> AppState
-      sumFull { users: au, addresses: aa, phones: ap } { users: bu, addresses: ba, phones: bp } =
-        { users: sumStats au bu, addresses: sumStats aa ba, phones: sumStats ap bp }
+      sumFull { users: au, addresses: aa, phones: ap, calls: ac } { users: bu, addresses: ba, phones: bp, calls: bc } =
+        { users: sumStats au bu, addresses: sumStats aa ba, phones: sumStats ap bp, calls: ac <> bc }
 
       statsZero = { cacheHit: 0, cacheMiss: 0 }
     in
-      foldr sumFull { users: statsZero, addresses: statsZero, phones: statsZero } arr
+      foldr sumFull { users: statsZero, addresses: statsZero, phones: statsZero, calls: [] } arr
 
   printStats :: ∀ m. (MonadLogger m) => AppState -> m Unit
-  printStats { users, addresses, phones } = do
+  printStats { users, addresses, phones, calls } = do
+
+    let
+      extractTimes :: Call -> { start :: Number, stop :: Number }
+      extractTimes (DatabaseCall start stop) = { start, stop }
+      extractTimes (CacheCall start stop) = { start, stop }
+
+      diffTimes :: { start :: Number, stop :: Number } -> Number
+      diffTimes { start, stop } = stop - start
+
+      getAllDurations :: Array Call -> Number
+      getAllDurations = map (extractTimes >>> diffTimes) >>> sum
+
+      cacheCalls = filter (isCacheCall) calls
+      dbCalls = filter (not isCacheCall) calls
+
     log Info $ "_________________________________________"
     log Info $ " Users:"
     log Info $ "   - Hit  : " <> show users.cacheHit
@@ -342,4 +386,9 @@ main = launchAff_ $ do
     log Info $ " Total Misses: " <> show (users.cacheMiss + addresses.cacheMiss + phones.cacheMiss)
     log Info $ "________________________________________"
     log Info $ " # Iterations: " <> show (users.cacheHit + users.cacheMiss + addresses.cacheHit + addresses.cacheMiss + phones.cacheHit + phones.cacheMiss)
+    log Info $ "________________________________________"
+    log Info $ "  Total calls to cache         : " <> show (length cacheCalls) <> " => " <> show (getAllDurations cacheCalls) <> "ms"
+    log Info $ "  Total calls to database      : " <> show (length dbCalls) <> " => " <> show (getAllDurations dbCalls) <> "ms"
+    log Info $ " Cache call average duration   : " <> toStringWith (fixed 3) (getAllDurations cacheCalls / (toNumber $ length cacheCalls)) <> "ms"
+    log Info $ " Database call average duration: " <> toStringWith (fixed 3) (getAllDurations dbCalls / (toNumber $ length dbCalls)) <> "ms"
 
