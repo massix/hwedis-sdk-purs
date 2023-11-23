@@ -15,9 +15,10 @@ import Data.Foldable (sum, traverse_)
 import Data.Int (toNumber)
 import Data.Maybe (Maybe(..))
 import Data.Number.Format (fixed, toStringWith)
+import Data.Serializable (class Deserializable)
 import Data.Time.Duration (Milliseconds(..))
 import Data.Traversable (traverse)
-import Data.Tuple (Tuple(..))
+import Data.Tuple (Tuple, snd)
 import Effect (Effect)
 import Effect.Aff (Aff, error, forkAff, joinFiber, killFiber, launchAff_, message)
 import Effect.Aff.Class (liftAff)
@@ -26,7 +27,9 @@ import Effect.Console as Console
 import Effect.Now (now)
 import Effect.Random (randomInt)
 import Misc.Logger (class MonadLogger, Severity(..), log)
-import Monad.Bench (AppM, AppState, CacheStats, Call(..), getCache, getDb, isCacheCall, putCache, runAppM, updateCache, updateDb)
+import Monad.Bench (AppM, AppState, CacheStats, Call(..), isCacheCall, runAppM)
+import Monad.MonadCache (PadLetter, getCache, putCache, updateCache)
+import Monad.MonadDatabase (getDb, updateDb)
 import Network.WebSocket as WS
 import Node.Buffer (toString)
 import Node.Encoding (Encoding(..))
@@ -46,54 +49,30 @@ instance Functor FoundWhere where
   map f (Cache a) = Cache (f a)
   map f (Db a) = Db (f a)
 
-getUserFromCacheOrDb :: Int -> AppM (FoundWhere User)
-getUserFromCacheOrDb id = do
-  { ws, pool, configuration: { db: { simulation: { minDelay, maxDelay } } } } <- ask
-  user <- getCache ws id
+getCacheOrDb :: ∀ a. DB.Findable a => Deserializable a => DecodeJson a => Int -> PadLetter -> AppM (FoundWhere a)
+getCacheOrDb id padLetter = do
+  { configuration: { db: { simulation: { minDelay, maxDelay } } } } <- ask
+  user <- getCache id padLetter
 
   case user of
     Nothing -> do
-      log Debug "Could not find user in cache, reverting to DB"
-      fromDb <- getDb minDelay maxDelay pool id
+      log Debug "Could not find entity in cache, reverting to DB"
+      fromDb <- getDb minDelay maxDelay id
       case fromDb of
         Nothing -> pure Nowhere
         Just x -> pure $ Db x
-
     Just x -> do
-      log Debug "User found in cache"
+      log Debug "Entity found in cache"
       pure $ Cache x
+
+getUserFromCacheOrDb :: Int -> AppM (FoundWhere User)
+getUserFromCacheOrDb id = getCacheOrDb id "U"
 
 getAddressFromCacheOrDb :: Int -> AppM (FoundWhere Address)
-getAddressFromCacheOrDb id = do
-  { ws, pool, configuration: { db: { simulation: { minDelay, maxDelay } } } } <- ask
-  address <- getCache ws id
-
-  case address of
-    Nothing -> do
-      log Debug "Could not find address in cache, reverting to DB"
-      fromDb <- getDb minDelay maxDelay pool id
-      case fromDb of
-        Nothing -> pure Nowhere
-        Just x -> pure $ Db x
-    Just x -> do
-      log Debug "Address found in cache"
-      pure $ Cache x
+getAddressFromCacheOrDb id = getCacheOrDb id "A"
 
 getPhoneFromCacheOrDb :: Int -> AppM (FoundWhere PhoneNumber)
-getPhoneFromCacheOrDb id = do
-  { ws, pool, configuration: { db: { simulation: { minDelay, maxDelay } } } } <- ask
-  phone <- getCache ws id
-
-  case phone of
-    Nothing -> do
-      log Debug "Could not find phone in cache, reverting to DB"
-      fromDb <- getDb minDelay maxDelay pool id
-      case fromDb of
-        Nothing -> pure Nowhere
-        Just x -> pure $ Db x
-    Just x -> do
-      log Debug "Phone found in cache"
-      pure $ Cache x
+getPhoneFromCacheOrDb id = getCacheOrDb id "P"
 
 data FakeRequest
   = GetUser Int
@@ -165,7 +144,7 @@ program = do
 
   runLoop :: Int -> Int -> AppM Unit
   runLoop limit count = when (count < limit) $ do
-    { clientId, ws, pool, configuration: { db: { simulation: { minDelay, maxDelay } } } } <- ask
+    { clientId, configuration: { db: { simulation: { minDelay, maxDelay } } } } <- ask
     currentState@{ users, addresses, phones, calls } <- get
 
     log Debug $ clientId <> " Iteration #" <> show count
@@ -183,7 +162,7 @@ program = do
           Nowhere -> log Error $ "Could not find user with id: " <> show id
           Cache _ -> put currentState { users = putCacheHit users, calls = calls <> [ (CacheCall requestStart end) ] }
           Db x -> do
-            putCache ws x
+            putCache x
             put currentState { users = putCacheMiss users, calls = calls <> [ (DatabaseCall requestStart end) ] }
       GetAddress id -> do
         a <- getAddressFromCacheOrDb id
@@ -192,7 +171,7 @@ program = do
           Nowhere -> log Error $ "Could not find address with id: " <> show id
           Cache _ -> put currentState { addresses = putCacheHit addresses, calls = calls <> [ (CacheCall requestStart end) ] }
           Db x -> do
-            putCache ws x
+            putCache x
             put currentState { addresses = putCacheMiss addresses, calls = calls <> [ (DatabaseCall requestStart end) ] }
       GetPhone id -> do
         p <- getPhoneFromCacheOrDb id
@@ -201,7 +180,7 @@ program = do
           Nowhere -> log Error $ "Could not find phone with id: " <> show id
           Cache _ -> put currentState { phones = putCacheHit phones, calls = calls <> [ (CacheCall requestStart end) ] }
           Db x -> do
-            putCache ws x
+            putCache x
             put currentState { phones = putCacheMiss phones, calls = calls <> [ (DatabaseCall requestStart end) ] }
       UpdateUser id -> do
         u <- getUserFromCacheOrDb id
@@ -210,13 +189,13 @@ program = do
           Nowhere -> log Error $ "Could not find user with id: " <> show id
           Cache (User { id: uid, firstname, lastname, address, phonenumber }) -> do
             let newUser = User { id: uid, firstname: firstname <> " modified", lastname: lastname <> " modified", address, phonenumber }
-            updateDb minDelay maxDelay pool newUser
-            updateCache ws newUser
+            updateDb minDelay maxDelay newUser
+            updateCache newUser
             put currentState { users = putCacheHit users, calls = calls <> [ (CacheCall requestStart end) ] }
           Db (User { id: uid, firstname, lastname, address, phonenumber }) -> do
             let newUser = User { id: uid, firstname: firstname <> " modified", lastname: lastname <> " modified", address, phonenumber }
-            updateDb minDelay maxDelay pool newUser
-            putCache ws newUser
+            updateDb minDelay maxDelay newUser
+            putCache newUser
             put currentState { users = putCacheMiss users, calls = calls <> [ (DatabaseCall requestStart end) ] }
       UpdateAddress id -> do
         a <- getAddressFromCacheOrDb id
@@ -225,13 +204,13 @@ program = do
           Nowhere -> log Error $ "Could not find address with id: " <> show id
           Cache (Address { id: aid, street, city, zip, country }) -> do
             let newAddress = Address { id: aid, street: street <> " modified", city: city <> " modified", zip, country }
-            updateDb minDelay maxDelay pool newAddress
-            updateCache ws newAddress
+            updateDb minDelay maxDelay newAddress
+            updateCache newAddress
             put currentState { addresses = putCacheHit addresses, calls = calls <> [ (CacheCall requestStart end) ] }
           Db (Address { id: aid, street, city, zip, country }) -> do
             let newAddress = Address { id: aid, street: street <> " modified", city: city <> " modified", zip, country }
-            updateDb minDelay maxDelay pool newAddress
-            putCache ws newAddress
+            updateDb minDelay maxDelay newAddress
+            putCache newAddress
             put currentState { addresses = putCacheMiss addresses, calls = calls <> [ (DatabaseCall requestStart end) ] }
       UpdatePhone id -> do
         p <- getPhoneFromCacheOrDb id
@@ -240,13 +219,13 @@ program = do
           Nowhere -> log Error $ "Could not find phone with id: " <> show id
           Cache (PhoneNumber { id: pid, number, prefix }) -> do
             let newPhone = PhoneNumber { id: pid, number: number <> " modified", prefix }
-            updateDb minDelay maxDelay pool newPhone
-            updateCache ws newPhone
+            updateDb minDelay maxDelay newPhone
+            updateCache newPhone
             put currentState { phones = putCacheHit phones, calls = calls <> [ (CacheCall requestStart end) ] }
           Db (PhoneNumber { id: pid, number, prefix }) -> do
             let newPhone = PhoneNumber { id: pid, number: number <> " modified", prefix }
-            updateDb minDelay maxDelay pool newPhone
-            putCache ws newPhone
+            updateDb minDelay maxDelay newPhone
+            putCache newPhone
             put currentState { phones = putCacheMiss phones, calls = calls <> [ (DatabaseCall requestStart end) ] }
 
     runLoop limit (count + 1)
@@ -313,7 +292,7 @@ main = launchAff_ $ do
         diff = toMilliseconds end - toMilliseconds start
 
       log Info "Benchmarking over, collecting and aggregating results..."
-      let aggregated = aggregateStats $ map (\(Tuple _ stats) -> stats) arrResults
+      let aggregated = aggregateStats $ map snd arrResults
 
       -- Print statistics:
       printStats aggregated

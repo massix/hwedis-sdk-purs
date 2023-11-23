@@ -13,6 +13,7 @@ import Effect.Console as Console
 import Effect.Now (nowDateTime)
 
 type PadSize = Int
+
 data Severity
   = Debug
   | Info
