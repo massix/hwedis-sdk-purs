@@ -10,7 +10,7 @@ import Data.Tuple (Tuple)
 import Effect.Aff (Aff)
 import Effect.Aff.Class (class MonadAff)
 import Effect.Class (class MonadEffect)
-import Misc.Logger (class MonadLogger, Severity(..))
+import Misc.Logger (class MonadLogger)
 import Monad.MonadCache (class MonadCache)
 import Monad.MonadDatabase (class MonadDatabase)
 import Network.WebSocket as WS
@@ -51,7 +51,7 @@ runAppM (AppM m) is env = runReaderT (runStateT m is) env
 
 instance MonadLogger AppM where
   getContext = pure "Bench"
-  getLogLevel = pure Info
+  getLogLevel = asks _.configuration.logLevel
 
 instance MonadCache AppM where
   getCacheConnection = asks _.ws

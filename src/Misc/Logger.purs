@@ -2,7 +2,9 @@ module Misc.Logger where
 
 import Prelude
 
+import Data.Argonaut (class DecodeJson, Json, JsonDecodeError(..), decodeJson)
 import Data.DateTime (date, day, hour, millisecond, minute, month, second, time, year)
+import Data.Either (Either(..))
 import Data.Enum (class BoundedEnum, fromEnum)
 import Data.String (Pattern(..), Replacement(..), replaceAll, toUpper)
 import Data.String.Utils (padStart)
@@ -22,6 +24,23 @@ data Severity
 
 derive instance Eq Severity
 derive instance Ord Severity
+
+instance Show Severity where
+  show Debug = "Debug"
+  show Info = "Info"
+  show Warning = "Warning"
+  show Error = "Error"
+
+instance DecodeJson Severity where
+  decodeJson :: Json -> Either JsonDecodeError Severity
+  decodeJson j = do
+    str <- decodeJson j
+    case str of
+      "Debug" -> Right Debug
+      "Info" -> Right Info
+      "Warning" -> Right Warning
+      "Error" -> Right Error
+      _ -> Left $ UnexpectedValue j
 
 instance Bounded Severity where
   top = Error

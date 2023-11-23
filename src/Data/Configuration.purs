@@ -16,6 +16,7 @@ import Data.Bifunctor (lmap)
 import Data.Either (Either(..))
 import Effect (Effect)
 import Effect.Exception (Error, catchException, message)
+import Misc.Logger (Severity(..))
 import Node.Buffer (toString)
 import Node.Encoding (Encoding(..))
 import Node.FS.Sync (readFile)
@@ -33,6 +34,7 @@ type Configuration =
   , iterationsPerWorker :: Int
   , db :: DbConfiguration
   , hwedis :: HwedisConfiguration
+  , logLevel :: Severity
   }
 
 type DbConfiguration =
@@ -72,6 +74,7 @@ defaultConfiguration =
       , port: 9092
       , clientPrefix: "bencher"
       }
+  , logLevel: Info
   }
 
 parse :: FilePath -> Effect (Either TomlParseError Configuration)

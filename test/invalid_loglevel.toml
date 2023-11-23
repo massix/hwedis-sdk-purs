@@ -1,6 +1,6 @@
 workers = 3
 iterationsPerWorker = 1234
-logLevel = "Warning"
+logLevel = "NotValid"
 
 [db]
 host = "fauxdb"

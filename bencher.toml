@@ -1,5 +1,6 @@
 workers = 10
 iterationsPerWorker = 1000
+logLevel = "Warning"
 
 [db]
 host = "localhost"

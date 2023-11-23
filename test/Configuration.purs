@@ -5,10 +5,11 @@ import Prelude
 import Data.Configuration as Config
 import Data.Either (Either(..), isLeft, isRight)
 import Effect.Class (liftEffect)
+import Misc.Logger (Severity(..))
 import Partial.Unsafe (unsafePartial)
 import Test.Spec (Spec, describe, it)
 import Test.Spec.Assertions (shouldEqual, shouldSatisfy)
-import Test.Spec.Assertions.String (shouldStartWith)
+import Test.Spec.Assertions.String (shouldEndWith, shouldStartWith)
 
 testConfiguration :: Spec Unit
 testConfiguration = do
@@ -23,6 +24,7 @@ testConfiguration = do
       config.db.host `shouldEqual` "fauxdb"
       config.db.user `shouldEqual` "configRead"
       config.hwedis.clientPrefix `shouldEqual` "fromConfig"
+      config.logLevel `shouldEqual` Warning
 
     it "should fail gracefully if the file does not exist" do
       allLeft <- liftEffect $ Config.parse "./test/doesnotexist.toml"
@@ -37,6 +39,13 @@ testConfiguration = do
 
       let error = unsafePartial $ unsafeLeft allLeft
       error `shouldStartWith` "An error occurred while decoding a JSON value:"
+
+    it "should fail if logLevel is set to a wrong value" do
+      allLeft <- liftEffect $ Config.parse "./test/invalid_loglevel.toml"
+      allLeft `shouldSatisfy` isLeft
+
+      let error = unsafePartial $ unsafeLeft allLeft
+      error `shouldEndWith` "Unexpected value \"NotValid\"."
 
   where
   unsafeRight :: ∀ a b. Partial => Either a b -> b
