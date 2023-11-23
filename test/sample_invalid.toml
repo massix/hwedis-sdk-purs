@@ -1,0 +1,15 @@
+works = 3
+itr = 1234
+
+[db]
+host = "fauxdb"
+port = 5432
+user = "configRead"
+
+[db.simulation]
+minDelay = 15
+
+[hwedis]
+host = "localhost"
+
+

@@ -1,0 +1,42 @@
+package:
+  dependencies:
+    - aff
+    - aff-promise
+    - argonaut
+    - arrays
+    - bifunctors
+    - console
+    - datetime
+    - effect
+    - either
+    - enums
+    - foldable-traversable
+    - foreign
+    - identity
+    - integers
+    - maybe
+    - node-buffer
+    - node-fs
+    - node-process
+    - now
+    - numbers
+    - partial
+    - prelude
+    - random
+    - spec
+    - strings
+    - stringutils
+    - tailrec
+    - transformers
+    - tuples
+    - unsafe-coerce
+    - yoga-postgres
+  name: hwedis-benchmark
+  test:
+    dependencies: []
+    main: Test.Main
+
+workspace:
+  extra_packages: {}
+  package_set:
+    registry: 46.0.2

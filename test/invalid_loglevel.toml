@@ -1,0 +1,20 @@
+workers = 3
+iterationsPerWorker = 1234
+logLevel = "NotValid"
+
+[db]
+host = "fauxdb"
+port = 5432
+user = "configRead"
+password = "pass"
+database = "db"
+
+[db.simulation]
+minDelay = 15
+maxDelay = 250
+
+[hwedis]
+host = "localhost"
+port = 9092
+clientPrefix = "fromConfig"
+
