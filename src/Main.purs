@@ -173,85 +173,89 @@ program = do
 
     randomRequest <- generateRandomRequest
 
-    requestStart <- liftEffect $ now >>= unInstant >>> extractInstant >>> pure
+    requestStart <- nowInMillisecs
+
     case randomRequest of
       GetUser id -> do
         u <- getUserFromCacheOrDb id
-        end <- liftEffect $ now >>= unInstant >>> extractInstant >>> pure
+        end <- nowInMillisecs
         case u of
           Nowhere -> log Error $ "Could not find user with id: " <> show id
-          Cache _ -> put currentState { users = putCacheHit users, calls = calls <> [(CacheCall requestStart end)] }
+          Cache _ -> put currentState { users = putCacheHit users, calls = calls <> [ (CacheCall requestStart end) ] }
           Db x -> do
             putCache ws x
-            put currentState { users = putCacheMiss users, calls = calls <> [(DatabaseCall requestStart end)] }
+            put currentState { users = putCacheMiss users, calls = calls <> [ (DatabaseCall requestStart end) ] }
       GetAddress id -> do
         a <- getAddressFromCacheOrDb id
-        end <- liftEffect $ now >>= unInstant >>> extractInstant >>> pure
+        end <- nowInMillisecs
         case a of
           Nowhere -> log Error $ "Could not find address with id: " <> show id
-          Cache _ -> put currentState { addresses = putCacheHit addresses, calls = calls <> [(CacheCall requestStart end)] }
+          Cache _ -> put currentState { addresses = putCacheHit addresses, calls = calls <> [ (CacheCall requestStart end) ] }
           Db x -> do
             putCache ws x
-            put currentState { addresses = putCacheMiss addresses, calls = calls <> [(DatabaseCall requestStart end)] }
+            put currentState { addresses = putCacheMiss addresses, calls = calls <> [ (DatabaseCall requestStart end) ] }
       GetPhone id -> do
         p <- getPhoneFromCacheOrDb id
-        end <- liftEffect $ now >>= unInstant >>> extractInstant >>> pure
+        end <- nowInMillisecs
         case p of
           Nowhere -> log Error $ "Could not find phone with id: " <> show id
-          Cache _ -> put currentState { phones = putCacheHit phones, calls = calls <> [(CacheCall requestStart end)] }
+          Cache _ -> put currentState { phones = putCacheHit phones, calls = calls <> [ (CacheCall requestStart end) ] }
           Db x -> do
             putCache ws x
-            put currentState { phones = putCacheMiss phones, calls = calls <> [(DatabaseCall requestStart end)] }
+            put currentState { phones = putCacheMiss phones, calls = calls <> [ (DatabaseCall requestStart end) ] }
       UpdateUser id -> do
         u <- getUserFromCacheOrDb id
-        end <- liftEffect $ now >>= unInstant >>> extractInstant >>> pure
+        end <- nowInMillisecs
         case u of
           Nowhere -> log Error $ "Could not find user with id: " <> show id
           Cache (User { id: uid, firstname, lastname, address, phonenumber }) -> do
             let newUser = User { id: uid, firstname: firstname <> " modified", lastname: lastname <> " modified", address, phonenumber }
             updateDb minDelay maxDelay pool newUser
             updateCache ws newUser
-            put currentState { users = putCacheHit users, calls = calls <> [(CacheCall requestStart end)] }
+            put currentState { users = putCacheHit users, calls = calls <> [ (CacheCall requestStart end) ] }
           Db (User { id: uid, firstname, lastname, address, phonenumber }) -> do
             let newUser = User { id: uid, firstname: firstname <> " modified", lastname: lastname <> " modified", address, phonenumber }
             updateDb minDelay maxDelay pool newUser
             putCache ws newUser
-            put currentState { users = putCacheMiss users, calls = calls <> [(DatabaseCall requestStart end)] }
+            put currentState { users = putCacheMiss users, calls = calls <> [ (DatabaseCall requestStart end) ] }
       UpdateAddress id -> do
         a <- getAddressFromCacheOrDb id
-        end <- liftEffect $ now >>= unInstant >>> extractInstant >>> pure
+        end <- nowInMillisecs
         case a of
           Nowhere -> log Error $ "Could not find address with id: " <> show id
           Cache (Address { id: aid, street, city, zip, country }) -> do
             let newAddress = Address { id: aid, street: street <> " modified", city: city <> " modified", zip, country }
             updateDb minDelay maxDelay pool newAddress
             updateCache ws newAddress
-            put currentState { addresses = putCacheHit addresses, calls = calls <> [(CacheCall requestStart end)] }
+            put currentState { addresses = putCacheHit addresses, calls = calls <> [ (CacheCall requestStart end) ] }
           Db (Address { id: aid, street, city, zip, country }) -> do
             let newAddress = Address { id: aid, street: street <> " modified", city: city <> " modified", zip, country }
             updateDb minDelay maxDelay pool newAddress
             putCache ws newAddress
-            put currentState { addresses = putCacheMiss addresses, calls = calls <> [(DatabaseCall requestStart end)] }
+            put currentState { addresses = putCacheMiss addresses, calls = calls <> [ (DatabaseCall requestStart end) ] }
       UpdatePhone id -> do
         p <- getPhoneFromCacheOrDb id
-        end <- liftEffect $ now >>= unInstant >>> extractInstant >>> pure
+        end <- nowInMillisecs
         case p of
-          Nowhere -> log Error $ "Could  not find phone with id: " <> show id
+          Nowhere -> log Error $ "Could not find phone with id: " <> show id
           Cache (PhoneNumber { id: pid, number, prefix }) -> do
             let newPhone = PhoneNumber { id: pid, number: number <> " modified", prefix }
             updateDb minDelay maxDelay pool newPhone
             updateCache ws newPhone
-            put currentState { phones = putCacheHit phones, calls = calls <> [(CacheCall requestStart end)] }
+            put currentState { phones = putCacheHit phones, calls = calls <> [ (CacheCall requestStart end) ] }
           Db (PhoneNumber { id: pid, number, prefix }) -> do
             let newPhone = PhoneNumber { id: pid, number: number <> " modified", prefix }
             updateDb minDelay maxDelay pool newPhone
             putCache ws newPhone
-            put currentState { phones = putCacheMiss phones, calls = calls <> [(DatabaseCall requestStart end)] }
+            put currentState { phones = putCacheMiss phones, calls = calls <> [ (DatabaseCall requestStart end) ] }
 
     runLoop limit (count + 1)
 
   extractInstant :: Milliseconds -> Number
   extractInstant (Milliseconds x) = x
+
+  nowInMillisecs :: ∀ m. MonadEffect m => m Number
+  nowInMillisecs = liftEffect $ now >>= unInstant >>> extractInstant >>> pure
 
 -- | Receiver: this function runs in an Aff context, always listening for messages coming from
 -- | the websocket and modifying the state in consequence. This fiber will never end.
@@ -302,11 +306,11 @@ main = launchAff_ $ do
       let
         extract :: Milliseconds -> Number
         extract (Milliseconds x) = x
+
         toMilliseconds :: Instant -> Number
         toMilliseconds = extract <<< unInstant
 
         diff = toMilliseconds end - toMilliseconds start
-
 
       log Info "Benchmarking over, collecting and aggregating results..."
       let aggregated = aggregateStats $ map (\(Tuple _ stats) -> stats) arrResults
